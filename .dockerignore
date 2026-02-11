@@ -28,6 +28,51 @@ __pycache__/
 # Test/Debug scripts
 check_*.py
 test_*.py
+debug_*.py
+verify_*.py
+inspect_*.py
+find_*.py
+compare_*.py
+list_*.py
+show_*.py
+create_test_*.py
+migrate_*.py
+manual_*.py
+simple_*.py
+direct_*.py
+populate_*.py
+add_*.py
+analyze_*.py
+fix_*.py
+delete_*.py
+remove_*.py
+
+# Documentation
+*.md
+README*
+GUIDE*
+SETUP*
+docs/
+
+# n8n workflows (not needed at runtime)
+n8n_workflows/
+
+# Translated videos
+translated_videos/
+
+# Batch/Shell scripts
+*.bat
+*.sh
+*.ps1
+
+# Large data files
+*.csv
+*.xlsx
+data/*.json
+
+# Model files that will be downloaded at runtime
+# placement_model.pkl
+# scaler.pkl
 fix_*.py
 debug_*.py
 

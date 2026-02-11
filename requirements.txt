@@ -7,10 +7,9 @@ Pillow>=10.0.0
 pytesseract>=0.3.10
 scikit-learn>=1.3.0
 
-# CRITICAL: PyTorch and transformers versions - DO NOT CHANGE
-# These specific versions are required for semantic skill matching
-# torch 2.9.0 has meta tensor bugs, torch 2.5.1 has autocast import errors
-torch==2.6.0
+# CPU-only PyTorch to reduce image size (from ~2GB to ~200MB)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.0+cpu
 sentence-transformers==2.7.0
 
 python-dotenv>=1.0.0
@@ -24,11 +23,7 @@ pdfminer.six>=20231228
 pymongo>=4.8.0
 google-generativeai>=0.3.0
 razorpay>=2.0.0
-moviepy>=1.0.3
-openai-whisper>=20231117
-deep-translator>=1.11.4
-elevenlabs>=0.2.0
-yt-dlp>=2023.10.0
+# Removed heavy video/audio dependencies (moviepy, whisper, elevenlabs, yt-dlp)
 # Chatbot API dependencies
 fastapi>=0.109.0
 uvicorn>=0.27.0
