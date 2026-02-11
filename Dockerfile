@@ -17,11 +17,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && rm -rf ~/.cache/pip
 
-# Copy application code (exclude unnecessary files)
-COPY . .
-
-# Remove unnecessary files to reduce size
-RUN rm -rf __pycache__ *.pyc .git tests/ *.md n8n_workflows/ translated_videos/ data/*.csv
+# Copy application code
+COPY app.py .
+COPY models/ ./models/
+COPY data/ ./data/
+COPY utils/ ./utils/
+COPY templates/ ./templates/
+COPY *.pkl ./
 
 # Expose port
 EXPOSE 8080
