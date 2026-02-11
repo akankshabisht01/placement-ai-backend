@@ -1,0 +1,424 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "collection": "quiz_analysis",
+        "options": {},
+        "query": "={\n  \"mobile\": \"{{ $json.body.mobile }}\"\n}\n"
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        -1296,
+        800
+      ],
+      "id": "b1f05f18-5805-4c99-8888-a2eac299c35d",
+      "name": "Find documents2",
+      "alwaysOutputData": true,
+      "credentials": {
+        "mongoDb": {
+          "id": "GuZ1YehZxYRUgAo1",
+          "name": "n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -1296,
+        432
+      ],
+      "id": "bd3f857c-6511-42bb-a8e8-718d6d2fcfe3",
+      "name": "Respond to Webhook1"
+    },
+    {
+      "parameters": {
+        "collection": "Resume",
+        "options": {},
+        "query": "={\n  \"phone\": \"{{ $json.body.mobile }}\"\n}\n\n"
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        -848,
+        576
+      ],
+      "id": "b8cab12a-d28d-463a-a894-2b7bf3d17032",
+      "name": "Find documents4",
+      "credentials": {
+        "mongoDb": {
+          "id": "FWqQNEWPwvhTFdwJ",
+          "name": "Placement_Ai"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -624,
+        720
+      ],
+      "id": "b90e5941-7a75-4aa7-91bd-f294b2f1f44c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Your input is an array of 2 JSON objects:\n// items[0] = user profile (includes unselectedSkills)\n// items[1] = quiz/skill analysis\n\nconst userProfile = items[0].json;\nconst skillData = items[1].json;\n\n// Merge both into a single structured JSON\nreturn [\n  {\n    json: {\n      name: userProfile.name,\n      email: userProfile.email,\n      phone: userProfile.phone,\n      cgpa: userProfile.cgpa,\n      currentSem: userProfile.currentSem,\n      college: userProfile.college,\n      degree: userProfile.degree,\n      unselectedSkills: $input.first().json.prediction?.inputData?.unselectedSkills || [],\n      skillAnalysis: skillData.skillAnalysis || [],\n      overallPerformance: skillData.overallPerformance || {},\n      summary: skillData.summary || \"\"\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        720
+      ],
+      "id": "895ecbe9-cab5-4e06-84e7-99273551bef8",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "e52661f1-2a51-40ec-90c6-35edb5eb00e2",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1520,
+        576
+      ],
+      "id": "c94680d1-41e6-4c82-8ec0-b930993274d1",
+      "name": "Roadmap and course generator",
+      "webhookId": "e52661f1-2a51-40ec-90c6-35edb5eb00e2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.perplexity.ai/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_PERPLEXITY_API_KEY_HERE"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  \"model\": \"sonar\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert AI career mentor and data science educator. You must output ONLY pure JSON. No explanations, no markdown, no comments. JSON must begin with '{' and end with '}'.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": `You are an expert AI career mentor.\n\nIMPORTANT OUTPUT RULE:\nYou must output ONLY pure JSON. No explanations, no markdown, no comments. JSON must begin with '{' and end with '}'.\n\n---------------------------------------\nTASK:\nBased on the provided student data, generate a personalized career roadmap for a student studying **2 hours per day**.\n\nUser Data Provided:\n- Unselected Skills: ${JSON.stringify($json.unselectedSkills)}\n- Missing Topics From Skill Analysis: ${JSON.stringify($json.skillAnalysis)}\n- Student Semester: ${$json.currentSem}\n- Student Phone (Unique ID): ${$json.phone}\n\n---------------------------------------\nROADMAP RULES:\n- Daily learning time = EXACTLY 2 hours/day.\n- Roadmap must be structured MONTH-WISE.\n- Inside each month include:\n  - Skill Focus\n  - Learning Goals (array)\n  - Daily Plan (2 hours/day) with WEEK-BY-WEEK breakdown\n  - Mini Project\n  - Expected Outcome\n\n---------------------------------------\nSEMESTER RULES:\n🟢 Sem 1–4 → multi-month roadmap allowed\n🟡 Sem 5–6 → 3–6 month roadmap\n🔴 Sem 7–8 → STRICT 3-month job-ready roadmap\n\n---------------------------------------\nSTRICT OUTPUT FORMAT (DO NOT BREAK):\n{\n  \"_id\": \"${$json.phone}\",\n  \"mobile\": \"${$json.phone}\",\n  \"roadmap\": {\n    \"Month 1\": {\n      \"Skill Focus\": \"\",\n      \"Learning Goals\": [],\n      \"Daily Plan (2 hours/day)\": [\n        \"Week 1: ... (2 hours breakdown)\",\n        \"Week 2: ... (2 hours breakdown)\",\n        \"Week 3: ... (2 hours breakdown)\",\n        \"Week 4: ... (2 hours breakdown)\"\n      ],\n      \"Mini Project\": \"\",\n      \"Expected Outcome\": \"\"\n    },\n    \"Month 2\": {\n      \"Skill Focus\": \"\",\n      \"Learning Goals\": [],\n      \"Daily Plan (2 hours/day)\": [\n        \"Week 1: ...\",\n        \"Week 2: ...\",\n        \"Week 3: ...\",\n        \"Week 4: ...\"\n      ],\n      \"Mini Project\": \"\",\n      \"Expected Outcome\": \"\"\n    },\n    \"Month 3\": {\n      \"Skill Focus\": \"\",\n      \"Learning Goals\": [],\n      \"Daily Plan (2 hours/day)\": [\n        \"Week 1: ...\",\n        \"Week 2: ...\",\n        \"Week 3: ...\",\n        \"Week 4: ...\"\n      ],\n      \"Mini Project\": \"\",\n      \"Expected Outcome\": \"\"\n    }\n  }\n}\n\n---------------------------------------\nDO NOT:\n- Do NOT add text before or after the JSON\n- Do NOT change field names\n- Do NOT add markdown\n- Do NOT add commentary\n- Only return valid JSON with the completed roadmap`\n    }\n  ],\n  \"max_tokens\": 4000,\n  \"temperature\": 0.4\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -176,
+        720
+      ],
+      "id": "6a1b660c-e792-47dd-b3d3-6a7a2e54849d",
+      "name": "HTTP Request3"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the AI response and parse it\nconst response = items[0].json;\nconst aiMessage = response.choices[0].message.content;\n\n// Clean up the response - remove any markdown or extra text\nlet cleanedJson = aiMessage.trim();\n\n// Remove markdown code blocks if present\nif (cleanedJson.startsWith('```json')) {\n  cleanedJson = cleanedJson.replace(/^```json\\s*/, '').replace(/\\s*```$/, '');\n} else if (cleanedJson.startsWith('```')) {\n  cleanedJson = cleanedJson.replace(/^```\\s*/, '').replace(/\\s*```$/, '');\n}\n\n// Parse the JSON\nconst roadmapData = JSON.parse(cleanedJson);\n\nreturn [\n  {\n    json: roadmapData\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48,
+        720
+      ],
+      "id": "parse-ai-response",
+      "name": "Parse AI Response"
+    },
+    {
+      "parameters": {
+        "collection": "Roadmap",
+        "operation": "update",
+        "options": {
+          "upsert": true
+        },
+        "updateKey": "mobile",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "_id",
+              "fieldValue": "={{ $json._id }}"
+            },
+            {
+              "fieldId": "mobile",
+              "fieldValue": "={{ $json.mobile }}"
+            },
+            {
+              "fieldId": "roadmap",
+              "fieldValue": "={{ JSON.stringify($json.roadmap) }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        272,
+        720
+      ],
+      "id": "save-roadmap",
+      "name": "Save to Roadmap Collection",
+      "credentials": {
+        "mongoDb": {
+          "id": "FWqQNEWPwvhTFdwJ",
+          "name": "Placement_Ai"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "15c710bf-d51c-4675-ba70-30e474cef64d",
+              "leftValue": "={{$json[\"_id\"]}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1072,
+        800
+      ],
+      "id": "20efbcc7-028a-418a-97a1-fafe7632bef9",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7d65895b-00bb-440d-b598-0fd1937939c9",
+              "name": "_id",
+              "value": "={{ $json._id }}",
+              "type": "string"
+            },
+            {
+              "id": "732174e5-e6b7-41e6-a2a8-e7ebd7d9e5d4",
+              "name": "mobile",
+              "value": "={{ $json.mobile }}",
+              "type": "string"
+            },
+            {
+              "id": "b52950bf-6265-4506-af0f-61b9535836b6",
+              "name": "overallPerformance",
+              "value": "={{ $json.overallPerformance }}",
+              "type": "object"
+            },
+            {
+              "id": "0b8f6b11-e8ef-43e6-8626-88953c5edd5c",
+              "name": "skillAnalysis",
+              "value": "={{ $json.skillAnalysis }}",
+              "type": "array"
+            },
+            {
+              "id": "1cc6fd63-bd47-4073-9d3e-19a7fa0bb3e7",
+              "name": "summary",
+              "value": "={{ $json.summary }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -848,
+        864
+      ],
+      "id": "b61eb063-afe6-4720-ab2c-92c9fa897389",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "gzQbV0g3hH0gbFMy",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/gzQbV0g3hH0gbFMy",
+          "cachedResultName": "roadmap and course"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -592,
+        464
+      ],
+      "id": "bc78787c-57f2-4057-bd23-2222094fa738",
+      "name": "Call 'roadmap and course'",
+      "alwaysOutputData": true
+    }
+  ],
+  "connections": {
+    "Find documents2": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find documents4": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Call 'roadmap and course'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roadmap and course generator": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Find documents4",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Find documents2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request3": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Save to Roadmap Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "35f99e4a9abaef657780e24d185942aac0abc84f6e3203b4edb71e0bd0f8de0b"
+  }
+}

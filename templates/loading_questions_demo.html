@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loading Questions Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .loading-container {
+            margin: 30px 0;
+            padding: 30px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        .question-text {
+            font-size: 22px;
+            margin-bottom: 30px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .options-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .option-btn {
+            background: white;
+            border: 3px solid #667eea;
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .option-btn:hover {
+            background: #667eea;
+            color: white;
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .option-btn.selected {
+            background: #667eea;
+            color: white;
+        }
+
+        .option-icon {
+            font-size: 32px;
+        }
+
+        .option-text {
+            font-weight: 500;
+        }
+
+        .fact-container {
+            margin: 20px 0;
+            padding: 20px;
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            border-radius: 8px;
+            font-size: 16px;
+            line-height: 1.6;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .context-selector {
+            margin-bottom: 20px;
+        }
+
+        .context-selector select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            font-size: 16px;
+            background: white;
+        }
+
+        .stats {
+            margin-top: 30px;
+            padding: 20px;
+            background: #e8f5e9;
+            border-radius: 8px;
+        }
+
+        .stats h3 {
+            color: #2e7d32;
+            margin-bottom: 15px;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #c8e6c9;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: center;
+        }
+
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Interactive Loading Questions</h1>
+        
+        <div class="context-selector">
+            <label for="context">Choose Context:</label>
+            <select id="context">
+                <option value="registration_loading">Registration Loading</option>
+                <option value="quiz_submission">Quiz Submission</option>
+                <option value="profile_update">Profile Update</option>
+                <option value="resume_analysis">Resume Analysis</option>
+                <option value="all">All Contexts</option>
+            </select>
+        </div>
+
+        <button class="btn" onclick="loadNewQuestion()">Load Random Question</button>
+        <button class="btn" onclick="loadRandomFact()">Show Random Fact</button>
+
+        <div id="loadingIndicator" style="display: none;">
+            <div class="spinner"></div>
+        </div>
+
+        <div id="messageContainer"></div>
+
+        <div id="questionContainer" style="display: none;">
+            <div class="loading-container">
+                <div class="question-text" id="questionText"></div>
+                <div class="options-container" id="optionsContainer"></div>
+            </div>
+            <button class="btn" id="submitBtn" onclick="submitResponse()" disabled>Submit Response</button>
+        </div>
+
+        <div id="factContainer" style="display: none;" class="fact-container"></div>
+
+        <div class="stats" id="statsContainer" style="display: none;">
+            <h3>📊 Your Preferences</h3>
+            <div id="statsContent"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE_URL = 'http://localhost:5000/api';
+        const USER_ID = 'demo_user_' + Math.random().toString(36).substring(7); // Demo user ID
+        
+        let currentQuestion = null;
+        let selectedOption = null;
+        let responseStartTime = null;
+
+        function showMessage(message, type = 'success') {
+            const container = document.getElementById('messageContainer');
+            container.innerHTML = `<div class="message ${type}">${message}</div>`;
+            setTimeout(() => {
+                container.innerHTML = '';
+            }, 3000);
+        }
+
+        function showLoading(show) {
+            document.getElementById('loadingIndicator').style.display = show ? 'block' : 'none';
+        }
+
+        async function loadNewQuestion() {
+            try {
+                showLoading(true);
+                document.getElementById('questionContainer').style.display = 'none';
+                document.getElementById('factContainer').style.display = 'none';
+                
+                const context = document.getElementById('context').value;
+                const response = await fetch(`${API_BASE_URL}/loading/question?context=${context}&user_id=${USER_ID}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentQuestion = data.question;
+                    selectedOption = null;
+                    responseStartTime = Date.now();
+                    displayQuestion(data.question);
+                } else {
+                    showMessage(data.error || 'Failed to load question', 'error');
+                }
+            } catch (error) {
+                showMessage('Error loading question: ' + error.message, 'error');
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function displayQuestion(question) {
+            document.getElementById('questionText').innerHTML = 
+                `${question.icon_emoji} ${question.question_text}`;
+            
+            const optionsContainer = document.getElementById('optionsContainer');
+            optionsContainer.innerHTML = '';
+            
+            question.options.forEach(option => {
+                const optionBtn = document.createElement('div');
+                optionBtn.className = 'option-btn';
+                optionBtn.onclick = () => selectOption(option.option_id, optionBtn);
+                optionBtn.innerHTML = `
+                    <div class="option-icon">${option.icon}</div>
+                    <div class="option-text">${option.text}</div>
+                `;
+                optionsContainer.appendChild(optionBtn);
+            });
+            
+            document.getElementById('questionContainer').style.display = 'block';
+            document.getElementById('submitBtn').disabled = true;
+        }
+
+        function selectOption(optionId, btnElement) {
+            // Remove previous selection
+            document.querySelectorAll('.option-btn').forEach(btn => {
+                btn.classList.remove('selected');
+            });
+            
+            // Add selection
+            btnElement.classList.add('selected');
+            selectedOption = optionId;
+            document.getElementById('submitBtn').disabled = false;
+        }
+
+        async function submitResponse() {
+            if (!selectedOption || !currentQuestion) {
+                showMessage('Please select an option', 'error');
+                return;
+            }
+
+            try {
+                const responseTime = Date.now() - responseStartTime;
+                const context = document.getElementById('context').value;
+                
+                const response = await fetch(`${API_BASE_URL}/loading/response`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: USER_ID,
+                        question_id: currentQuestion.question_id,
+                        selected_options: [selectedOption],
+                        context: context,
+                        response_time_ms: responseTime
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showMessage('✅ Response saved! Loading next question...', 'success');
+                    setTimeout(() => {
+                        loadNewQuestion();
+                        loadUserPreferences();
+                    }, 1000);
+                } else {
+                    showMessage(data.error || 'Failed to save response', 'error');
+                }
+            } catch (error) {
+                showMessage('Error saving response: ' + error.message, 'error');
+            }
+        }
+
+        async function loadRandomFact() {
+            try {
+                showLoading(true);
+                document.getElementById('questionContainer').style.display = 'none';
+                document.getElementById('factContainer').style.display = 'none';
+                
+                const response = await fetch(`${API_BASE_URL}/loading/fact`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('factContainer').innerHTML = 
+                        `${data.fact.icon} ${data.fact.fact_text}`;
+                    document.getElementById('factContainer').style.display = 'block';
+                } else {
+                    showMessage(data.error || 'Failed to load fact', 'error');
+                }
+            } catch (error) {
+                showMessage('Error loading fact: ' + error.message, 'error');
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function loadUserPreferences() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/loading/user-preferences/${USER_ID}`);
+                const data = await response.json();
+                
+                if (data.success && data.total_responses > 0) {
+                    displayStats(data);
+                }
+            } catch (error) {
+                console.error('Error loading preferences:', error);
+            }
+        }
+
+        function displayStats(data) {
+            const statsContainer = document.getElementById('statsContainer');
+            const statsContent = document.getElementById('statsContent');
+            
+            let html = `<div class="stat-item"><strong>Total Responses:</strong> <span>${data.total_responses}</span></div>`;
+            html += `<div class="stat-item"><strong>Coupon Categories:</strong> <span>${data.coupon_categories.join(', ')}</span></div>`;
+            
+            statsContent.innerHTML = html;
+            statsContainer.style.display = 'block';
+        }
+
+        // Load a question on page load
+        window.onload = () => {
+            loadNewQuestion();
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# Video Translation Dependencies
+moviepy==1.0.3
+openai-whisper==20231117
+deep-translator==1.11.4
+elevenlabs==0.2.27
+google-generativeai==0.3.2
+ffmpeg-python==0.2.0
+
+# Additional dependencies
+numpy>=1.24.0
+scipy>=1.10.0
+imageio>=2.25.0
+imageio-ffmpeg>=0.4.8
+Pillow>=9.4.0
