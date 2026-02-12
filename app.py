@@ -83,20 +83,11 @@ _weekly_plan_lock_mutex = threading.Lock()
 resend_api_key = os.getenv('RESEND_API_KEY', '')
 email_password = os.getenv('EMAIL_PASSWORD', '')
 
-if resend_api_key:
-    print("✅ Using Resend API for OTP emails")
-    active_otp_service = resend_otp_service
-    use_mock_otp = False
-elif email_password and email_password not in ['your-app-password', 'your-gmail-app-password-here']:
-    print("✅ Using Gmail SMTP for OTP emails (may not work on cloud platforms)")
-    active_otp_service = otp_service
-    use_mock_otp = False
-else:
-    print("⚠️  Using Mock OTP Service (no email configured)")
-    print("📧 All OTPs will be: 123456")
-    print("🔧 Set RESEND_API_KEY (recommended) or EMAIL_PASSWORD to enable real emails")
-    active_otp_service = mock_otp_service
-    use_mock_otp = True
+# Always use Mock OTP for demo/production (no domain verification needed)
+print("📧 Using Demo OTP Service")
+print("🔐 All OTPs will be: 123456")
+active_otp_service = mock_otp_service
+use_mock_otp = True
 
 app = Flask(__name__)
 # Limit uploaded file size to 10MB
@@ -4153,10 +4144,13 @@ def send_otp():
                 'message': 'Please enter a valid email address'
             }), 400
         
-        # Send OTP using configured service (Resend or Gmail)
+        # Send OTP using demo service (always 123456)
         result = active_otp_service.send_otp(email, user_name)
         
         if result['success']:
+            # Always return demo_mode so frontend shows the OTP hint
+            result['demo_mode'] = True
+            result['message'] = 'OTP sent successfully. Use OTP: 123456'
             return jsonify(result)
         else:
             print(f"❌ Failed to send OTP to {email}: {result.get('message')}")
