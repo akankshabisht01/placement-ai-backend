@@ -109,8 +109,8 @@ class OTPService:
             message.attach(text_part)
             message.attach(html_part)
             
-            # Send email
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+            # Send email with timeout
+            with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
                 server.starttls()
                 server.login(self.sender_email, self.sender_password)
                 server.send_message(message)
@@ -134,6 +134,12 @@ class OTPService:
                     'success': False,
                     'message': f'Authentication error: {error_msg}'
                 }
+        except (smtplib.SMTPException, TimeoutError, OSError) as e:
+            print(f"SMTP/Network Error sending OTP: {str(e)}")
+            return {
+                'success': False,
+                'message': 'Email server connection failed. Please try again later.'
+            }
         except Exception as e:
             print(f"Error sending OTP: {str(e)}")
             return {
