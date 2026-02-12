@@ -20,6 +20,7 @@ from utils.db import save_parsed_resume, save_candidate_prediction, get_db, norm
 from utils.suggestions import generate_suggestions
 from utils.otp_service import otp_service
 from utils.mock_otp_service import mock_otp_service
+from utils.resend_otp_service import resend_otp_service
 from utils.student_analysis import save_student_analysis_safe, bulk_sync_resumes_to_analysis, sync_resume_to_student_analysis
 from utils.validators import validate_prediction_input, sanitize_text_input, deduplicate_skills
 from utils.error_handler import (
@@ -78,19 +79,24 @@ import threading
 _weekly_plan_locks = {}
 _weekly_plan_lock_mutex = threading.Lock()
 
-# Check if Gmail is properly configured
+# Check which OTP service to use (priority: Resend API > Gmail SMTP > Mock)
+resend_api_key = os.getenv('RESEND_API_KEY', '')
 email_password = os.getenv('EMAIL_PASSWORD', '')
-use_mock_otp = (not email_password or 
-                email_password in ['your-app-password', 'your-gmail-app-password-here'])
 
-if use_mock_otp:
-    print("⚠️  Using Mock OTP Service (Gmail not configured)")
-    print("📧 All OTPs will be: 123456")
-    print("🔧 To enable real emails, set up Gmail App Password in .env")
-    active_otp_service = mock_otp_service
-else:
-    print("✅ Using Real Gmail OTP Service")
+if resend_api_key:
+    print("✅ Using Resend API for OTP emails")
+    active_otp_service = resend_otp_service
+    use_mock_otp = False
+elif email_password and email_password not in ['your-app-password', 'your-gmail-app-password-here']:
+    print("✅ Using Gmail SMTP for OTP emails (may not work on cloud platforms)")
     active_otp_service = otp_service
+    use_mock_otp = False
+else:
+    print("⚠️  Using Mock OTP Service (no email configured)")
+    print("📧 All OTPs will be: 123456")
+    print("🔧 Set RESEND_API_KEY (recommended) or EMAIL_PASSWORD to enable real emails")
+    active_otp_service = mock_otp_service
+    use_mock_otp = True
 
 app = Flask(__name__)
 # Limit uploaded file size to 10MB
@@ -135,7 +141,7 @@ def config_check():
     env_vars = [
         'MONGODB_URI', 'MONGODB_DB', 'MONGO_URI',
         'PERPLEXITY_API_KEY', 'GEMINI_API', 'OPENAI_API_KEY',
-        'EMAIL_PASSWORD', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET',
+        'RESEND_API_KEY', 'EMAIL_PASSWORD', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET',
         'N8N_ROADMAP_WEBHOOK', 'N8N_WEEKLY_TEST_WEBHOOK'
     ]
     config_status = {}
@@ -146,9 +152,17 @@ def config_check():
         else:
             config_status[var] = "❌ Not set"
     
+    # Determine OTP service being used
+    if os.getenv('RESEND_API_KEY'):
+        otp_service_type = 'resend'
+    elif not use_mock_otp:
+        otp_service_type = 'gmail'
+    else:
+        otp_service_type = 'mock'
+    
     return jsonify({
         'status': 'ok',
-        'otp_mode': 'mock' if use_mock_otp else 'real',
+        'otp_mode': otp_service_type,
         'email_password_check': f"Length: {len(os.getenv('EMAIL_PASSWORD', ''))}",
         'config': config_status
     })
