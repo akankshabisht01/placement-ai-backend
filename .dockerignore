@@ -7,27 +7,63 @@ env/
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-.Python
 
 # Environment files
 .env
 .env.local
-.env.*.local
+.env.bak*
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
 # Git
 .git/
-.gitignore
 
-# Test/Debug scripts
+# Documentation
+*.md
+*.txt
+!requirements.txt
+
+# Test/Debug/Check scripts - exclude all utility scripts
 check_*.py
 test_*.py
+debug_*.py
+verify_*.py
+inspect_*.py
+find_*.py
+compare_*.py
+list_*.py
+show_*.py
+create_test_*.py
+migrate_*.py
+manual_*.py
+simple_*.py
+direct_*.py
+populate_*.py
+add_*.py
+analyze_*.py
+fix_*.py
+delete_*.py
+remove_*.py
+validate_*.py
+generate_*.py
+detailed_*.py
+final_*.py
+
+# N8N workflows
+n8n_workflows/
+
+# Logs
+*.log
+
+# Batch files
+*.bat
+*.sh
+*.ps1
+
+# Translated videos
+translated_videos/
 debug_*.py
 verify_*.py
 inspect_*.py
