@@ -14,13 +14,12 @@ class OTPService:
         self.smtp_server = "smtp.gmail.com"
         self.smtp_port = 587
         self.sender_email = "placementprediction007@gmail.com"
-        self.sender_password = os.getenv('EMAIL_PASSWORD', 'your-app-password')  # Use app password for Gmail
         self.otp_storage = {}  # In production, use Redis or database
-        
-        # Validate email password is set
-        if self.sender_password == 'your-app-password' or not self.sender_password:
-            print("⚠️  WARNING: Gmail App Password not configured in .env file!")
-            print("📧 Please set EMAIL_PASSWORD in your .env file with a Gmail App Password")
+    
+    @property
+    def sender_password(self):
+        """Get password dynamically from environment"""
+        return os.getenv('EMAIL_PASSWORD', '')
         
     def generate_otp(self, length=6):
         """Generate a random OTP of specified length"""

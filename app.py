@@ -81,7 +81,7 @@ _weekly_plan_lock_mutex = threading.Lock()
 # Check if Gmail is properly configured
 email_password = os.getenv('EMAIL_PASSWORD', '')
 use_mock_otp = (not email_password or 
-                email_password in ['your-app-password', 'your-gmail-app-password-here', 'Launchpad03'])
+                email_password in ['your-app-password', 'your-gmail-app-password-here'])
 
 if use_mock_otp:
     print("⚠️  Using Mock OTP Service (Gmail not configured)")
@@ -126,6 +126,31 @@ def index():
         'status': 'ok',
         'message': 'Placement AI Backend is running',
         'version': '1.0.0'
+    })
+
+# Configuration check endpoint for debugging
+@app.route('/api/config-check')
+def config_check():
+    """Check which environment variables are configured (without revealing values)"""
+    env_vars = [
+        'MONGODB_URI', 'MONGODB_DB', 'MONGO_URI',
+        'PERPLEXITY_API_KEY', 'GEMINI_API', 'OPENAI_API_KEY',
+        'EMAIL_PASSWORD', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET',
+        'N8N_ROADMAP_WEBHOOK', 'N8N_WEEKLY_TEST_WEBHOOK'
+    ]
+    config_status = {}
+    for var in env_vars:
+        value = os.getenv(var, '')
+        if value:
+            config_status[var] = f"✅ Set ({len(value)} chars)"
+        else:
+            config_status[var] = "❌ Not set"
+    
+    return jsonify({
+        'status': 'ok',
+        'otp_mode': 'mock' if use_mock_otp else 'real',
+        'email_password_check': f"Length: {len(os.getenv('EMAIL_PASSWORD', ''))}",
+        'config': config_status
     })
 
 # Initialize the ML-based placement predictor
