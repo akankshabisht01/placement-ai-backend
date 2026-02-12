@@ -1,4 +1,5 @@
 import smtplib
+import ssl
 import random
 import string
 from email.mime.text import MIMEText
@@ -12,7 +13,8 @@ load_dotenv()
 class OTPService:
     def __init__(self):
         self.smtp_server = "smtp.gmail.com"
-        self.smtp_port = 587
+        self.smtp_port_ssl = 465  # SSL port (try first)
+        self.smtp_port_tls = 587  # TLS port (fallback)
         self.sender_email = "placementprediction007@gmail.com"
         self.otp_storage = {}  # In production, use Redis or database
     
@@ -108,17 +110,44 @@ class OTPService:
             message.attach(text_part)
             message.attach(html_part)
             
-            # Send email with timeout
-            with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
-                server.starttls()
-                server.login(self.sender_email, self.sender_password)
-                server.send_message(message)
+            # Try SSL on port 465 first (often works when TLS is blocked)
+            send_success = False
+            last_error = None
             
-            return {
-                'success': True,
-                'message': 'OTP sent successfully',
-                'expiry_minutes': 5
-            }
+            # Method 1: SMTP_SSL on port 465
+            try:
+                print(f"Trying Gmail SSL on port {self.smtp_port_ssl}...")
+                context = ssl.create_default_context()
+                with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port_ssl, context=context, timeout=30) as server:
+                    server.login(self.sender_email, self.sender_password)
+                    server.send_message(message)
+                    send_success = True
+                    print("Email sent successfully via SSL (port 465)")
+            except Exception as ssl_error:
+                last_error = ssl_error
+                print(f"SSL (port 465) failed: {str(ssl_error)}")
+                
+                # Method 2: SMTP with STARTTLS on port 587 as fallback
+                try:
+                    print(f"Trying Gmail STARTTLS on port {self.smtp_port_tls}...")
+                    with smtplib.SMTP(self.smtp_server, self.smtp_port_tls, timeout=30) as server:
+                        server.starttls()
+                        server.login(self.sender_email, self.sender_password)
+                        server.send_message(message)
+                        send_success = True
+                        print("Email sent successfully via STARTTLS (port 587)")
+                except Exception as tls_error:
+                    last_error = tls_error
+                    print(f"STARTTLS (port 587) failed: {str(tls_error)}")
+            
+            if send_success:
+                return {
+                    'success': True,
+                    'message': 'OTP sent successfully',
+                    'expiry_minutes': 5
+                }
+            else:
+                raise last_error
             
         except smtplib.SMTPAuthenticationError as e:
             error_msg = str(e)
