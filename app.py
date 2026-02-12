@@ -1,12 +1,7 @@
-import sys
-import os
-
-# Add the app directory to Python path for Railway deployment
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
+import os
 import tempfile
 import time
 import random
@@ -20,7 +15,6 @@ from utils.db import save_parsed_resume, save_candidate_prediction, get_db, norm
 from utils.suggestions import generate_suggestions
 from utils.otp_service import otp_service
 from utils.mock_otp_service import mock_otp_service
-from utils.resend_otp_service import resend_otp_service
 from utils.student_analysis import save_student_analysis_safe, bulk_sync_resumes_to_analysis, sync_resume_to_student_analysis
 from utils.validators import validate_prediction_input, sanitize_text_input, deduplicate_skills
 from utils.error_handler import (
@@ -79,15 +73,19 @@ import threading
 _weekly_plan_locks = {}
 _weekly_plan_lock_mutex = threading.Lock()
 
-# Check which OTP service to use (priority: Resend API > Gmail SMTP > Mock)
-resend_api_key = os.getenv('RESEND_API_KEY', '')
+# Check if Gmail is properly configured
 email_password = os.getenv('EMAIL_PASSWORD', '')
+use_mock_otp = (not email_password or 
+                email_password in ['your-app-password', 'your-gmail-app-password-here', 'Launchpad03'])
 
-# Always use Mock OTP for demo/production (no domain verification needed)
-print("📧 Using Demo OTP Service")
-print("🔐 All OTPs will be: 123456")
-active_otp_service = mock_otp_service
-use_mock_otp = True
+if use_mock_otp:
+    print("⚠️  Using Mock OTP Service (Gmail not configured)")
+    print("📧 All OTPs will be: 123456")
+    print("🔧 To enable real emails, set up Gmail App Password in .env")
+    active_otp_service = mock_otp_service
+else:
+    print("✅ Using Real Gmail OTP Service")
+    active_otp_service = otp_service
 
 app = Flask(__name__)
 # Limit uploaded file size to 10MB
@@ -115,48 +113,6 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
-
-# Root route for health check
-@app.route('/')
-def index():
-    return jsonify({
-        'status': 'ok',
-        'message': 'Placement AI Backend is running',
-        'version': '1.0.0'
-    })
-
-# Configuration check endpoint for debugging
-@app.route('/api/config-check')
-def config_check():
-    """Check which environment variables are configured (without revealing values)"""
-    env_vars = [
-        'MONGODB_URI', 'MONGODB_DB', 'MONGO_URI',
-        'PERPLEXITY_API_KEY', 'GEMINI_API', 'OPENAI_API_KEY',
-        'RESEND_API_KEY', 'EMAIL_PASSWORD', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET',
-        'N8N_ROADMAP_WEBHOOK', 'N8N_WEEKLY_TEST_WEBHOOK'
-    ]
-    config_status = {}
-    for var in env_vars:
-        value = os.getenv(var, '')
-        if value:
-            config_status[var] = f"✅ Set ({len(value)} chars)"
-        else:
-            config_status[var] = "❌ Not set"
-    
-    # Determine OTP service being used
-    if os.getenv('RESEND_API_KEY'):
-        otp_service_type = 'resend'
-    elif not use_mock_otp:
-        otp_service_type = 'gmail'
-    else:
-        otp_service_type = 'mock'
-    
-    return jsonify({
-        'status': 'ok',
-        'otp_mode': otp_service_type,
-        'email_password_check': f"Length: {len(os.getenv('EMAIL_PASSWORD', ''))}",
-        'config': config_status
-    })
 
 # Initialize the ML-based placement predictor
 predictor = MLPlacementPredictor()
@@ -473,56 +429,49 @@ def check_weekly_test():
         db = get_db()
         week_test_collection = db['week_test']
         
-        # Try multiple mobile number format variants (same as weekly-test-generator)
-        orig = mobile.strip()
-        candidates = []
-        candidates.append(orig)
-        candidates.append(orig.replace(' ', ''))
-        candidates.append(orig.replace('+', ''))
-        candidates.append(''.join([c for c in orig if c.isdigit()]))
+        # Normalize mobile number for searching
+        normalized = ''.join(filter(str.isdigit, mobile))
+        mobile_10 = normalized[-10:] if len(normalized) >= 10 else normalized
         
-        digits = ''.join([c for c in orig if c.isdigit()])
-        if len(digits) == 10:
-            candidates.append(f"+91 {digits}")
-            candidates.append(f"+91{digits}")
-        elif len(digits) > 10:
-            last10 = digits[-10:]
-            candidates.append(last10)
-            candidates.append(f"+91 {last10}")
-            candidates.append(f"+91{last10}")
+        # Build search variants
+        search_variants = [
+            mobile,
+            normalized,
+            mobile_10,
+            f"+91{mobile_10}",
+            f"+91 {mobile_10}",
+            f"91{mobile_10}"
+        ]
         
-        # Remove duplicates while preserving order
-        seen = set()
-        uniq = []
-        for c in candidates:
-            if c not in seen:
-                seen.add(c)
-                uniq.append(c)
+        print(f"[check-weekly-test] Searching for Week {week}, Month {month}, mobile variants: {search_variants}")
         
-        # If week and month are provided, check for that specific test
-        if week is not None and month is not None:
-            print(f"[check-weekly-test] Checking for specific Week {week}, Month {month}")
-        else:
-            print(f"[check-weekly-test] Checking for any test")
-        
-        # Check if test exists - try _id first (main storage format), then mobile field
+        # Try to find test by mobile field OR _id
         test_exists = None
-        matched_format = None
-        
-        for cand in uniq:
-            # Try _id lookup first (how n8n stores it)
-            test_exists = week_test_collection.find_one({'_id': cand})
+        for variant in search_variants:
+            # Build query for mobile field
+            query = {'mobile': variant}
+            if week is not None and month is not None:
+                query['week'] = week
+                query['month'] = month
+            
+            test_exists = week_test_collection.find_one(query)
             if test_exists:
-                matched_format = f"_id={cand}"
+                print(f"[check-weekly-test] ✅ Found via mobile field with: {variant}")
                 break
-            # Also try mobile field as fallback
-            test_exists = week_test_collection.find_one({'mobile': cand})
+            
+            # Also try _id
+            query_id = {'_id': variant}
+            if week is not None and month is not None:
+                query_id['week'] = week
+                query_id['month'] = month
+            
+            test_exists = week_test_collection.find_one(query_id)
             if test_exists:
-                matched_format = f"mobile={cand}"
+                print(f"[check-weekly-test] ✅ Found via _id with: {variant}")
                 break
         
         if test_exists:
-            print(f"[check-weekly-test] ✅ Test found for mobile: {mobile} (matched: {matched_format}), Week: {test_exists.get('week')}, Month: {test_exists.get('month')}")
+            print(f"[check-weekly-test] ✅ Test found for mobile: {mobile}, Week: {test_exists.get('week')}, Month: {test_exists.get('month')}")
             return jsonify({'success': True, 'exists': True, 'test': {'week': test_exists.get('week'), 'month': test_exists.get('month')}})
         else:
             print(f"[check-weekly-test] ⏳ Test not yet found for mobile: {mobile}, Week: {week}, Month: {month}")
@@ -530,36 +479,6 @@ def check_weekly_test():
             
     except Exception as e:
         print(f"[check-weekly-test] ❌ Error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/api/debug-list-weekly-tests', methods=['GET'])
-def debug_list_weekly_tests():
-    """Debug endpoint to list all documents in week_test collection"""
-    try:
-        db = get_db()
-        week_test_collection = db['week_test']
-        
-        # Get all documents (limit to 20 for safety)
-        tests = list(week_test_collection.find({}).limit(20))
-        
-        # Extract just the _id, mobile, week, month fields for debugging
-        simplified = []
-        for t in tests:
-            simplified.append({
-                '_id': str(t.get('_id', 'N/A')),
-                'mobile': t.get('mobile', 'N/A'),
-                'week': t.get('week', 'N/A'),
-                'month': t.get('month', 'N/A'),
-                'has_questions': 'questions' in t or 'weekly_tests' in t
-            })
-        
-        return jsonify({
-            'success': True,
-            'count': len(simplified),
-            'tests': simplified
-        })
-    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -4208,16 +4127,12 @@ def send_otp():
                 'message': 'Please enter a valid email address'
             }), 400
         
-        # Send OTP using demo service (always 123456)
+        # Send OTP
         result = active_otp_service.send_otp(email, user_name)
         
         if result['success']:
-            # Always return demo_mode so frontend shows the OTP hint
-            result['demo_mode'] = True
-            result['message'] = 'OTP sent successfully. Use OTP: 123456'
             return jsonify(result)
         else:
-            print(f"❌ Failed to send OTP to {email}: {result.get('message')}")
             return jsonify(result), 500
             
     except Exception as e:
@@ -4241,7 +4156,7 @@ def verify_otp():
         email = data.get('email').strip().lower()
         otp = data.get('otp').strip()
         
-        # Verify OTP using configured service
+        # Verify OTP
         result = active_otp_service.verify_otp(email, otp)
         
         if result['success']:
@@ -13021,10 +12936,13 @@ def get_project_steps():
         print(f"\n=== Getting project steps from Perplexity AI ===")
         print(f"📋 Project: {project_title}")
         
-        # Get Perplexity API key from environment
+        # Get Perplexity API key from environment (required)
         api_key = os.getenv('PERPLEXITY_API_KEY')
         if not api_key:
-            return jsonify({'success': False, 'message': 'Perplexity API key not configured'}), 500
+            return jsonify({
+                'success': False,
+                'message': 'PERPLEXITY_API_KEY environment variable is not configured'
+            }), 500
         
         # Construct prompt for Perplexity
         prompt = f"""You are an expert software project manager helping a student build this SPECIFIC project: "{project_title}".
