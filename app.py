@@ -1,7 +1,12 @@
+import sys
+import os
+
+# Add the app directory to Python path for Railway deployment
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
-import os
 import tempfile
 import time
 import random

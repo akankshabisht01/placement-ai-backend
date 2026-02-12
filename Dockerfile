@@ -7,6 +7,7 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
 # Copy requirements first for caching
 COPY requirements.txt .
@@ -14,11 +15,24 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy ALL application files
-COPY . .
+# Copy essential application files explicitly
+COPY app.py .
+COPY chatbot_api.py .
+COPY domain_keywords.py .
+COPY loading_questions_api.py .
+COPY *.pkl ./
 
-# Make sure Python can find local modules
-ENV PYTHONPATH=/app
+# Copy package directories
+COPY models/ ./models/
+COPY data/ ./data/
+COPY utils/ ./utils/
+COPY templates/ ./templates/
+
+# Debug: List what was copied
+RUN echo "=== Contents of /app ===" && ls -la /app/ && \
+    echo "=== Contents of /app/models ===" && ls -la /app/models/ && \
+    echo "=== Contents of /app/data ===" && ls -la /app/data/ && \
+    echo "=== Contents of /app/utils ===" && ls -la /app/utils/
 
 # Expose port
 EXPOSE 8080
