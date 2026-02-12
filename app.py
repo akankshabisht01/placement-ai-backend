@@ -4153,20 +4153,13 @@ def send_otp():
                 'message': 'Please enter a valid email address'
             }), 400
         
-        # Try real OTP service first
+        # Send OTP using configured service (Resend or Gmail)
         result = active_otp_service.send_otp(email, user_name)
-        
-        # If real email fails, fallback to mock OTP service
-        if not result['success'] and active_otp_service != mock_otp_service:
-            print(f"⚠️ Real email failed, falling back to mock OTP for {email}")
-            result = mock_otp_service.send_otp(email, user_name)
-            if result['success']:
-                result['message'] = 'OTP sent successfully. (Demo mode: Use OTP 123456)'
-                result['demo_mode'] = True
         
         if result['success']:
             return jsonify(result)
         else:
+            print(f"❌ Failed to send OTP to {email}: {result.get('message')}")
             return jsonify(result), 500
             
     except Exception as e:
@@ -4190,14 +4183,8 @@ def verify_otp():
         email = data.get('email').strip().lower()
         otp = data.get('otp').strip()
         
-        # Try active OTP service first
+        # Verify OTP using configured service
         result = active_otp_service.verify_otp(email, otp)
-        
-        # If not found in active service, try mock service (fallback mode)
-        if not result['success'] and active_otp_service != mock_otp_service:
-            mock_result = mock_otp_service.verify_otp(email, otp)
-            if mock_result['success']:
-                result = mock_result
         
         if result['success']:
             return jsonify(result)
