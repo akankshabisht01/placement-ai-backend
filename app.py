@@ -119,6 +119,15 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
+# Root route for health check
+@app.route('/')
+def index():
+    return jsonify({
+        'status': 'ok',
+        'message': 'Placement AI Backend is running',
+        'version': '1.0.0'
+    })
+
 # Initialize the ML-based placement predictor
 predictor = MLPlacementPredictor()
 
