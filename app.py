@@ -473,22 +473,56 @@ def check_weekly_test():
         db = get_db()
         week_test_collection = db['week_test']
         
-        # Build query
-        query = {'mobile': mobile}
+        # Try multiple mobile number format variants (same as weekly-test-generator)
+        orig = mobile.strip()
+        candidates = []
+        candidates.append(orig)
+        candidates.append(orig.replace(' ', ''))
+        candidates.append(orig.replace('+', ''))
+        candidates.append(''.join([c for c in orig if c.isdigit()]))
+        
+        digits = ''.join([c for c in orig if c.isdigit()])
+        if len(digits) == 10:
+            candidates.append(f"+91 {digits}")
+            candidates.append(f"+91{digits}")
+        elif len(digits) > 10:
+            last10 = digits[-10:]
+            candidates.append(last10)
+            candidates.append(f"+91 {last10}")
+            candidates.append(f"+91{last10}")
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        uniq = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                uniq.append(c)
         
         # If week and month are provided, check for that specific test
         if week is not None and month is not None:
-            query['week'] = week
-            query['month'] = month
             print(f"[check-weekly-test] Checking for specific Week {week}, Month {month}")
         else:
             print(f"[check-weekly-test] Checking for any test")
         
-        # Check if test exists
-        test_exists = week_test_collection.find_one(query)
+        # Check if test exists - try _id first (main storage format), then mobile field
+        test_exists = None
+        matched_format = None
+        
+        for cand in uniq:
+            # Try _id lookup first (how n8n stores it)
+            test_exists = week_test_collection.find_one({'_id': cand})
+            if test_exists:
+                matched_format = f"_id={cand}"
+                break
+            # Also try mobile field as fallback
+            test_exists = week_test_collection.find_one({'mobile': cand})
+            if test_exists:
+                matched_format = f"mobile={cand}"
+                break
         
         if test_exists:
-            print(f"[check-weekly-test] ✅ Test found for mobile: {mobile}, Week: {week}, Month: {month}")
+            print(f"[check-weekly-test] ✅ Test found for mobile: {mobile} (matched: {matched_format}), Week: {test_exists.get('week')}, Month: {test_exists.get('month')}")
             return jsonify({'success': True, 'exists': True, 'test': {'week': test_exists.get('week'), 'month': test_exists.get('month')}})
         else:
             print(f"[check-weekly-test] ⏳ Test not yet found for mobile: {mobile}, Week: {week}, Month: {month}")
