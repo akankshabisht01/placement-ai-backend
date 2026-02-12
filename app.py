@@ -533,6 +533,36 @@ def check_weekly_test():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/debug-list-weekly-tests', methods=['GET'])
+def debug_list_weekly_tests():
+    """Debug endpoint to list all documents in week_test collection"""
+    try:
+        db = get_db()
+        week_test_collection = db['week_test']
+        
+        # Get all documents (limit to 20 for safety)
+        tests = list(week_test_collection.find({}).limit(20))
+        
+        # Extract just the _id, mobile, week, month fields for debugging
+        simplified = []
+        for t in tests:
+            simplified.append({
+                '_id': str(t.get('_id', 'N/A')),
+                'mobile': t.get('mobile', 'N/A'),
+                'week': t.get('week', 'N/A'),
+                'month': t.get('month', 'N/A'),
+                'has_questions': 'questions' in t or 'weekly_tests' in t
+            })
+        
+        return jsonify({
+            'success': True,
+            'count': len(simplified),
+            'tests': simplified
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/debug-weekly-test-payload', methods=['POST', 'OPTIONS'])
 def debug_weekly_test_payload():
     """Debug endpoint to show what payload would be sent to N8N without actually calling it"""
