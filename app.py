@@ -3257,6 +3257,118 @@ def get_monthly_test_status(mobile, month):
         }), 500
 
 
+@app.route('/api/monthly-test-result/<mobile>/<int:month>', methods=['GET'])
+def get_monthly_test_result(mobile, month):
+    """
+    Get the result of a monthly test for a user
+    Returns:
+    - passed: bool (whether score >= 50%)
+    - scorePercentage: float
+    - testAttempt: int (current attempt number, 1-3)
+    - canRetake: bool (whether user can retake - unlimited for now)
+    - correctAnswers: int
+    - totalQuestions: int
+    """
+    try:
+        if not mobile:
+            return jsonify({
+                'success': False,
+                'error': 'Mobile number is required'
+            }), 400
+        
+        mobile = mobile.strip()
+        
+        # Connect to MongoDB
+        mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
+        if not mongo_uri:
+            return jsonify({
+                'success': False,
+                'error': 'Database connection not configured'
+            }), 500
+            
+        client = MongoClient(mongo_uri)
+        db = client[os.getenv("MONGODB_DB", "Placement_Ai")]
+        result_collection = db["monthly_test_result"]
+        
+        # Normalize mobile number formats to search
+        normalized_mobile = mobile.replace("+", "").replace(" ", "").replace("-", "")
+        mobile_10 = normalized_mobile[-10:] if len(normalized_mobile) >= 10 else normalized_mobile
+        
+        search_ids = [mobile, normalized_mobile, mobile_10]
+        if len(normalized_mobile) == 10:
+            search_ids.extend([
+                f"91{normalized_mobile}",
+                f"+91{normalized_mobile}",
+                f"+91 {mobile_10}"
+            ])
+        
+        # Try to find result by _id (mobile) + month
+        result_doc = None
+        for search_id in search_ids:
+            result_doc = result_collection.find_one({'_id': search_id, 'month': month})
+            if result_doc:
+                print(f"[monthly-test-result] Found result with _id: {search_id}, month: {month}")
+                break
+        
+        # Fallback to old format
+        if not result_doc:
+            for search_id in search_ids:
+                result_id_variant = f"{search_id}_month_{month}"
+                result_doc = result_collection.find_one({'_id': result_id_variant})
+                if result_doc:
+                    print(f"[monthly-test-result] Found result with old _id pattern: {result_id_variant}")
+                    break
+        
+        if not result_doc:
+            print(f"[monthly-test-result] No result found for mobile: {mobile}, month: {month}")
+            client.close()
+            return jsonify({
+                'success': False,
+                'error': 'No test result found for this month',
+                'data': None
+            }), 404
+        
+        # Extract result data
+        passed = result_doc.get('passed', False)
+        score_percentage = result_doc.get('scorePercentage', 0)
+        test_attempt = result_doc.get('testAttempt', 1)
+        correct_answers = result_doc.get('correctAnswers', 0)
+        total_questions = result_doc.get('totalQuestions', 0)
+        completed_at = result_doc.get('completedAt')
+        
+        # For now, allow unlimited retakes (canRetake = True if failed)
+        # In future, can add cooldown logic here
+        can_retake = not passed  # Can retake if not passed
+        
+        print(f"[monthly-test-result] Result: passed={passed}, score={score_percentage}%, attempt={test_attempt}")
+        
+        client.close()
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'mobile': mobile,
+                'month': month,
+                'passed': passed,
+                'scorePercentage': score_percentage,
+                'testAttempt': test_attempt,
+                'canRetake': can_retake,
+                'correctAnswers': correct_answers,
+                'totalQuestions': total_questions,
+                'completedAt': completed_at
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in get-monthly-test-result: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.route('/api/db-health', methods=['GET'])
 @handle_errors
 def db_health_check():
