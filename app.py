@@ -2485,10 +2485,8 @@ def get_monthly_analysis_by_month(mobile, month):
                 },
                 {'_id': 1, 'mobile': 1, 'month': 1, 'testAttempt': 1, 'test_number': 1}
             )
-            {'_id': 1, 'mobile': 1, 'month': 1, 'testAttempt': 1, 'test_number': 1}
-        )
         
-        # Fallback 1: check test_number field (n8n might save it as test_number)
+        # Fallback 2: check test_number field (n8n might save it as test_number)
         if not analysis:
             analysis = analysis_collection.find_one(
                 {
