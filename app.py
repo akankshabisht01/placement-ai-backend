@@ -2835,6 +2835,82 @@ def monthly_test_retake_status():
         current_attempt = test_result.get('testAttempt', 1)
         next_test_number = current_attempt + 1
         
+        # Check if max attempts (3) reached
+        max_attempts_reached = current_attempt >= 3
+        
+        # Check if analysis was generated for current attempt
+        monthly_analysis_collection = db["Monthly_test_analysis"]
+        analysis_for_current_attempt = None
+        
+        for cand in candidates:
+            analysis_for_current_attempt = monthly_analysis_collection.find_one({
+                'mobile': cand,
+                'month': month,
+                'testAttempt': current_attempt
+            })
+            if analysis_for_current_attempt:
+                break
+        
+        # Fallback: check without testAttempt filter (for older analysis docs)
+        if not analysis_for_current_attempt:
+            for cand in candidates:
+                analysis_doc = monthly_analysis_collection.find_one({
+                    'mobile': cand,
+                    'month': month
+                })
+                if analysis_doc:
+                    # Check if this analysis is for the current attempt
+                    analysis_attempt = analysis_doc.get('testAttempt', 1)
+                    if analysis_attempt == current_attempt:
+                        analysis_for_current_attempt = analysis_doc
+                    break
+        
+        analysis_generated = analysis_for_current_attempt is not None
+        
+        # Check if 3-minute post-analysis timer has elapsed
+        analysis_timer_remaining = 0
+        can_show_retake = False
+        
+        if analysis_generated:
+            # Check when analysis was created
+            analysis_created_at = analysis_for_current_attempt.get('createdAt') or analysis_for_current_attempt.get('created_at')
+            
+            # Fallback to ObjectId generation time if no createdAt field
+            if not analysis_created_at and '_id' in analysis_for_current_attempt:
+                from bson import ObjectId
+                _id = analysis_for_current_attempt['_id']
+                if isinstance(_id, ObjectId):
+                    analysis_created_at = _id.generation_time
+            
+            if analysis_created_at:
+                from datetime import datetime
+                if isinstance(analysis_created_at, str):
+                    try:
+                        analysis_dt = datetime.fromisoformat(analysis_created_at.replace('Z', '+00:00'))
+                    except:
+                        analysis_dt = datetime.now()
+                elif isinstance(analysis_created_at, datetime):
+                    analysis_dt = analysis_created_at
+                else:
+                    analysis_dt = datetime.now()
+                
+                # Make analysis_dt timezone-naive for comparison
+                if analysis_dt.tzinfo is not None:
+                    analysis_dt = analysis_dt.replace(tzinfo=None)
+                
+                elapsed_seconds = (datetime.now() - analysis_dt).total_seconds()
+                timer_duration = 180  # 3 minutes
+                
+                if elapsed_seconds < timer_duration:
+                    analysis_timer_remaining = int(timer_duration - elapsed_seconds)
+                    can_show_retake = False
+                else:
+                    analysis_timer_remaining = 0
+                    can_show_retake = True
+            else:
+                # No timestamp, assume timer elapsed
+                can_show_retake = True
+        
         # Check if a new test with the next test_number already exists in monthly_test collection
         monthly_test_collection = db["monthly_test"]
         test_exists = False
@@ -2888,10 +2964,15 @@ def monthly_test_retake_status():
             'success': True,
             'needsRetake': True,
             'percentage': percentage,
-            'canRetake': can_retake,
+            'canRetake': can_retake and can_show_retake and not max_attempts_reached,
             'hoursRemaining': hours_remaining,
             'testAttempt': current_attempt,
             'nextTestNumber': next_test_number,
+            'analysisGenerated': analysis_generated,
+            'analysisTimerRemaining': analysis_timer_remaining,
+            'maxAttemptsReached': max_attempts_reached,
+            'showAnalysisButton': not analysis_generated,  # Show analysis button only if not generated yet
+            'showRetakeButton': analysis_generated and can_show_retake and not max_attempts_reached,  # Show retake only after analysis + timer
             'message': f'Score {percentage}% is below passing threshold of 50%. Retake required.'
         }), 200
         
