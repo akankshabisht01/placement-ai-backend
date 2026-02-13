@@ -2601,32 +2601,36 @@ def check_month_test_eligibility(mobile):
                 
                 prev_month_passed = False
                 
-                # First, check if monthly analysis exists for previous month
-                # Analysis can only exist if the test was passed, so it's proof of passing
-                monthly_analysis_collection = db['monthly_test_analysis']
+                # Check monthly_test_result for actual score (most reliable source)
                 for cand in candidates:
-                    prev_analysis = monthly_analysis_collection.find_one({
-                        'mobile': cand,
-                        'month': prev_month
-                    })
-                    if prev_analysis:
-                        prev_month_passed = True
+                    # Try new format first (mobile as _id, filter by month)
+                    prev_result = monthly_result_collection.find_one({'_id': cand, 'month': prev_month})
+                    # Fallback to old format
+                    if not prev_result:
+                        result_id = f"{cand}_month_{prev_month}"
+                        prev_result = monthly_result_collection.find_one({'_id': result_id})
+                    if prev_result:
+                        # Support both new (scorePercentage) and old (percentage) field names
+                        percentage = prev_result.get('scorePercentage') or prev_result.get('percentage', 0)
+                        if percentage >= 50:
+                            prev_month_passed = True
                         break
                 
-                # Fallback: check monthly_test_result (may be overwritten by newer month)
+                # Fallback: check if analysis exists AND extract score from it
                 if not prev_month_passed:
+                    monthly_analysis_collection = db['monthly_test_analysis']
                     for cand in candidates:
-                        # Try new format first (mobile as _id, filter by month)
-                        prev_result = monthly_result_collection.find_one({'_id': cand, 'month': prev_month})
-                        # Fallback to old format
-                        if not prev_result:
-                            result_id = f"{cand}_month_{prev_month}"
-                            prev_result = monthly_result_collection.find_one({'_id': result_id})
-                        if prev_result:
-                            # Support both new (scorePercentage) and old (percentage) field names
-                            percentage = prev_result.get('scorePercentage') or prev_result.get('percentage', 0)
-                            if percentage >= 50:
-                                prev_month_passed = True
+                        prev_analysis = monthly_analysis_collection.find_one({
+                            'mobile': cand,
+                            'month': prev_month
+                        })
+                        if prev_analysis:
+                            # Extract score from rawTestData
+                            raw_test_data = prev_analysis.get('rawTestData', {})
+                            if isinstance(raw_test_data, dict):
+                                analysis_percentage = raw_test_data.get('percentage') or raw_test_data.get('scorePercentage', 0)
+                                if analysis_percentage >= 50:
+                                    prev_month_passed = True
                             break
                 
                 # If previous month test not passed, block current month
@@ -2687,14 +2691,15 @@ def check_month_test_eligibility(mobile):
                             analysis_percentage = raw_test_data.get('percentage') or raw_test_data.get('scorePercentage')
                         break
                 
-                # If analysis exists, it means test was passed (analysis can only be generated after passing)
-                # This handles the case where result doc was overwritten by a newer month's test
+                # Analysis can exist even if user failed (for learning from mistakes)
+                # Check actual percentage to determine pass/fail
                 if analysis_exists:
                     test_taken = True
-                    test_passed = True
                     # Use analysis percentage if result percentage is not available
                     if test_percentage is None and analysis_percentage is not None:
                         test_percentage = analysis_percentage
+                    # Check if user actually passed based on percentage
+                    test_passed = (test_percentage is not None and test_percentage >= 50)
                 else:
                     test_taken = test_result is not None
                 
