@@ -2839,7 +2839,7 @@ def monthly_test_retake_status():
         max_attempts_reached = current_attempt >= 3
         
         # Check if analysis was generated for current attempt
-        monthly_analysis_collection = db["Monthly_test_analysis"]
+        monthly_analysis_collection = db["monthly_test_analysis"]
         analysis_for_current_attempt = None
         
         for cand in candidates:
