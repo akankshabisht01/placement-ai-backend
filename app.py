@@ -2669,8 +2669,20 @@ def check_month_test_eligibility(mobile):
                                     prev_month_passed = True
                             break
                 
-                # If previous month test not passed, block current month
+                # Check for accepted failure (Option D: user accepted failure and chose to proceed)
+                prev_month_accepted_failure = False
                 if not prev_month_passed:
+                    failures_collection = db['accepted_monthly_failures']
+                    for cand in candidates:
+                        failure_id = f"{cand}_month_{prev_month}"
+                        accepted_failure = failures_collection.find_one({'_id': failure_id})
+                        if accepted_failure:
+                            prev_month_accepted_failure = True
+                            print(f"✅ Found accepted failure for month {prev_month}, allowing user to proceed")
+                            break
+                
+                # If previous month test not passed AND no accepted failure, block current month
+                if not prev_month_passed and not prev_month_accepted_failure:
                     can_unlock = False
                     blocked_by_previous_month = True
             
@@ -2681,8 +2693,23 @@ def check_month_test_eligibility(mobile):
                 'total_weeks': 4,
                 'is_unlocked': can_unlock,
                 'progress_percentage': (len(completed_weeks) / 4) * 100,
-                'blocked_by_previous_month': blocked_by_previous_month
+                'blocked_by_previous_month': blocked_by_previous_month,
+                'accepted_failure': False  # Will be updated below if applicable
             }
+            
+            # Check if this month has an accepted failure
+            failures_collection = db['accepted_monthly_failures']
+            search_candidates = [mobile, normalized_mobile, mobile_10]
+            if len(normalized_mobile) == 10:
+                search_candidates.extend([f"91{normalized_mobile}", f"+91{normalized_mobile}", f"+91 {mobile_10}"])
+            
+            for cand in search_candidates:
+                failure_id = f"{cand}_month_{month_num}"
+                accepted_failure = failures_collection.find_one({'_id': failure_id})
+                if accepted_failure:
+                    month_data['accepted_failure'] = True
+                    month_data['failure_accepted_at'] = accepted_failure.get('acceptedAt')
+                    break
             
             if can_unlock:
                 # Check if test has been taken and passed - look for highest test_number (latest attempt)
@@ -3039,6 +3066,95 @@ def monthly_test_retake_status():
         
     except Exception as e:
         print(f"❌ Error in monthly-test-retake-status: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/accept-monthly-failure', methods=['POST'])
+def accept_monthly_failure():
+    """
+    Mark a monthly test as "accepted failure" - allows user to proceed to next month
+    even though they failed all 3 attempts.
+    
+    This stores an "accepted_failure" record so the month eligibility check
+    allows the user to unlock the next month.
+    
+    Request body:
+    {
+        "mobile": "+91 9391277292",
+        "month": 1
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "message": "Month 1 marked as failed. You can now proceed to Month 2.",
+        "failedMonth": 1
+    }
+    """
+    try:
+        data = request.get_json()
+        mobile = data.get('mobile')
+        month = data.get('month', 1)
+        
+        if not mobile:
+            return jsonify({
+                'success': False,
+                'error': 'Mobile number is required'
+            }), 400
+        
+        mobile = mobile.strip()
+        month = int(month)
+        
+        # Connect to MongoDB
+        mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
+        if not mongo_uri:
+            return jsonify({
+                'success': False,
+                'error': 'Database connection not configured'
+            }), 500
+            
+        client = MongoClient(mongo_uri)
+        db = client[os.getenv("MONGODB_DB", "Placement_Ai")]
+        
+        # Create or use accepted_failures collection
+        failures_collection = db["accepted_monthly_failures"]
+        
+        # Generate unique ID for this failure record
+        failure_id = f"{mobile}_month_{month}"
+        
+        # Create the failure acceptance record
+        from datetime import datetime
+        failure_record = {
+            '_id': failure_id,
+            'mobile': mobile,
+            'month': month,
+            'acceptedAt': datetime.now().isoformat(),
+            'status': 'failed',
+            'maxAttemptsUsed': True
+        }
+        
+        # Upsert the record
+        failures_collection.update_one(
+            {'_id': failure_id},
+            {'$set': failure_record},
+            upsert=True
+        )
+        
+        print(f"✅ Accepted monthly failure for {mobile} month {month}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Month {month} marked as failed. You can now proceed to Month {month + 1}.',
+            'failedMonth': month
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in accept-monthly-failure: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({
