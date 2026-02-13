@@ -413,6 +413,211 @@ def notify_answer_response():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/weekly-test-status/<mobile>/<int:week>/<int:month>', methods=['GET'])
+def get_weekly_test_status(mobile, week, month):
+    """
+    Unified endpoint to get complete weekly test status in ONE call.
+    Returns all states needed for the Weekly Test UI to prevent button flashing.
+    
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "testGenerated": bool,      // Test exists in week_test collection
+            "testCompleted": bool,      // Result exists in week_test_result collection
+            "analysisExists": bool,     // Analysis exists in Weekly_test_analysis
+            "timerRemaining": int,      // Seconds remaining on post-analysis timer
+            "timerDuration": int,       // Total timer duration (180 or 300)
+            "canGenerateNext": bool,    // Timer has passed, can generate next
+            "nextAction": string,       // 'generate_weekly_test' or 'generate_monthly_test'
+            "isMonthEndWeek": bool      // Week is 4, 8, 12 (end of month cycle)
+        }
+    }
+    """
+    try:
+        if not mobile:
+            return jsonify({'success': False, 'error': 'Mobile number is required'}), 400
+        
+        print(f"[weekly-test-status] Checking status for mobile: {mobile}, week: {week}, month: {month}")
+        
+        # Connect to MongoDB
+        mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
+        if not mongo_uri:
+            return jsonify({'success': False, 'error': 'Database connection not configured'}), 500
+            
+        client = MongoClient(mongo_uri)
+        db = client[os.getenv("MONGODB_DB", "Placement_Ai")]
+        
+        # Build mobile search variants
+        normalized = ''.join(filter(str.isdigit, mobile))
+        mobile_10 = normalized[-10:] if len(normalized) >= 10 else normalized
+        search_variants = [mobile, normalized, mobile_10]
+        if len(normalized) == 10:
+            search_variants.extend([f"+91{mobile_10}", f"+91 {mobile_10}", f"91{mobile_10}"])
+        
+        # ---------- CHECK 1: Test Generated (week_test collection) ----------
+        week_test_collection = db['week_test']
+        test_generated = False
+        
+        for variant in search_variants:
+            found = week_test_collection.find_one({
+                'mobile': variant,
+                'week': week,
+                'month': month
+            })
+            if found:
+                test_generated = True
+                break
+            # Try _id
+            found = week_test_collection.find_one({
+                '_id': variant,
+                'week': week,
+                'month': month
+            })
+            if found:
+                test_generated = True
+                break
+        
+        # ---------- CHECK 2: Test Completed (week_test_result collection) ----------
+        result_collection = db['week_test_result']
+        test_completed = False
+        
+        for variant in search_variants:
+            # Try mobile-only _id (new format)
+            found = result_collection.find_one({
+                '_id': variant,
+                'week': week,
+                'month': month
+            })
+            if found:
+                test_completed = True
+                break
+            # Try old format _id: mobile_week_X
+            found = result_collection.find_one({'_id': f"{variant}_week_{week}"})
+            if found and found.get('month') == month:
+                test_completed = True
+                break
+            # Try mobile field
+            found = result_collection.find_one({
+                'mobile': variant,
+                'week': week,
+                'month': month
+            })
+            if found:
+                test_completed = True
+                break
+        
+        # ---------- CHECK 3: Analysis Exists (Weekly_test_analysis collection) ----------
+        analysis_collection = db['Weekly_test_analysis']
+        analysis_exists = False
+        analysis_doc = None
+        
+        for variant in search_variants:
+            found = analysis_collection.find_one({
+                'mobile': variant,
+                'analysis.week': week,
+                'analysis.month': month
+            })
+            if found:
+                analysis_exists = True
+                analysis_doc = found
+                break
+            # Try _id pattern
+            found = analysis_collection.find_one({
+                '_id': f'{variant}_week_{week}',
+                'analysis.month': month
+            })
+            if found:
+                analysis_exists = True
+                analysis_doc = found
+                break
+        
+        # ---------- CHECK 4: Timer Status ----------
+        timer_remaining = 0
+        timer_duration = 0
+        can_generate_next = False
+        next_action = None
+        is_month_end_week = (week % 4 == 0)  # Week 4, 8, 12 are month-end
+        
+        if analysis_exists and analysis_doc:
+            # Determine timer duration
+            timer_duration = 180 if is_month_end_week else 300  # 3 min for month-end, 5 min otherwise
+            next_action = 'generate_monthly_test' if is_month_end_week else 'generate_weekly_test'
+            
+            # Get timestamp from tracking collection
+            tracking_collection = db["analysis_timer_tracking"]
+            tracking_id = f"{mobile}_weekly_{week}_{month}"
+            tracking_doc = tracking_collection.find_one({'_id': tracking_id})
+            
+            analysis_completed_at = None
+            if tracking_doc:
+                analysis_completed_at = tracking_doc.get('completed_at')
+            
+            # Fallback to analysis doc timestamps
+            if not analysis_completed_at:
+                analysis_completed_at = (
+                    analysis_doc.get('createdAt') or 
+                    analysis_doc.get('created_at') or
+                    analysis_doc.get('timestamp') or
+                    analysis_doc.get('analysis', {}).get('createdAt')
+                )
+            
+            # Calculate timer
+            if analysis_completed_at:
+                from datetime import datetime
+                if isinstance(analysis_completed_at, str):
+                    try:
+                        analysis_dt = datetime.fromisoformat(analysis_completed_at.replace('Z', '+00:00'))
+                        if analysis_dt.tzinfo:
+                            analysis_dt = analysis_dt.replace(tzinfo=None)
+                    except:
+                        analysis_dt = datetime.now()
+                elif isinstance(analysis_completed_at, datetime):
+                    if analysis_completed_at.tzinfo:
+                        analysis_completed_at = analysis_completed_at.replace(tzinfo=None)
+                    analysis_dt = analysis_completed_at
+                else:
+                    analysis_dt = datetime.now()
+                
+                elapsed_seconds = (datetime.now() - analysis_dt).total_seconds()
+                
+                if elapsed_seconds < timer_duration:
+                    timer_remaining = int(timer_duration - elapsed_seconds)
+                    can_generate_next = False
+                else:
+                    timer_remaining = 0
+                    can_generate_next = True
+            else:
+                # No timestamp, assume timer elapsed
+                can_generate_next = True
+        
+        client.close()
+        
+        print(f"[weekly-test-status] Result: generated={test_generated}, completed={test_completed}, analysis={analysis_exists}, timer={timer_remaining}s")
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'testGenerated': test_generated,
+                'testCompleted': test_completed,
+                'analysisExists': analysis_exists,
+                'timerRemaining': timer_remaining,
+                'timerDuration': timer_duration,
+                'canGenerateNext': can_generate_next,
+                'nextAction': next_action,
+                'isMonthEndWeek': is_month_end_week,
+                'week': week,
+                'month': month
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"[weekly-test-status] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/check-weekly-test', methods=['POST'])
 def check_weekly_test():
     """Check if weekly test exists in week_test collection for a given mobile number, week, and month"""
