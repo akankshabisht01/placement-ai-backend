@@ -2466,14 +2466,40 @@ def get_monthly_analysis_by_month(mobile, month):
         print(f"[monthly-analysis-check] Latest test attempt: {current_test_attempt}")
         
         # STEP 2: Check if analysis exists for this specific test attempt
+        # Primary check: testAttempt field
         analysis = analysis_collection.find_one(
             {
                 'mobile': {'$in': search_patterns},
                 'month': month,
                 'testAttempt': current_test_attempt
             },
-            {'_id': 1, 'mobile': 1, 'month': 1, 'testAttempt': 1}
+            {'_id': 1, 'mobile': 1, 'month': 1, 'testAttempt': 1, 'test_number': 1}
         )
+        
+        # Fallback 1: check test_number field (n8n might save it as test_number)
+        if not analysis:
+            analysis = analysis_collection.find_one(
+                {
+                    'mobile': {'$in': search_patterns},
+                    'month': month,
+                    'test_number': current_test_attempt
+                },
+                {'_id': 1, 'mobile': 1, 'month': 1, 'testAttempt': 1, 'test_number': 1}
+            )
+        
+        # Fallback 2: check without attempt filter (for older analysis docs)
+        if not analysis:
+            analysis = analysis_collection.find_one(
+                {
+                    'mobile': {'$in': search_patterns},
+                    'month': month
+                }
+            )
+            if analysis:
+                # Check if this analysis is for the current attempt (check both field names, default to 1)
+                analysis_attempt = analysis.get('testAttempt') or analysis.get('test_number', 1)
+                if analysis_attempt != current_test_attempt:
+                    analysis = None  # Not for current attempt
         
         if analysis:
             print(f"[monthly-analysis-check] Found analysis: {analysis['_id']} for attempt {current_test_attempt}")
@@ -2842,6 +2868,7 @@ def monthly_test_retake_status():
         monthly_analysis_collection = db["monthly_test_analysis"]
         analysis_for_current_attempt = None
         
+        # Primary search: check for testAttempt field matching current attempt
         for cand in candidates:
             analysis_for_current_attempt = monthly_analysis_collection.find_one({
                 'mobile': cand,
@@ -2851,7 +2878,18 @@ def monthly_test_retake_status():
             if analysis_for_current_attempt:
                 break
         
-        # Fallback: check without testAttempt filter (for older analysis docs)
+        # Fallback 1: check for test_number field (n8n might save it as test_number)
+        if not analysis_for_current_attempt:
+            for cand in candidates:
+                analysis_for_current_attempt = monthly_analysis_collection.find_one({
+                    'mobile': cand,
+                    'month': month,
+                    'test_number': current_attempt
+                })
+                if analysis_for_current_attempt:
+                    break
+        
+        # Fallback 2: check without attempt filter (for older docs), validate testAttempt/test_number
         if not analysis_for_current_attempt:
             for cand in candidates:
                 analysis_doc = monthly_analysis_collection.find_one({
@@ -2859,8 +2897,8 @@ def monthly_test_retake_status():
                     'month': month
                 })
                 if analysis_doc:
-                    # Check if this analysis is for the current attempt
-                    analysis_attempt = analysis_doc.get('testAttempt', 1)
+                    # Check if this analysis is for the current attempt (check both field names)
+                    analysis_attempt = analysis_doc.get('testAttempt') or analysis_doc.get('test_number', 1)
                     if analysis_attempt == current_attempt:
                         analysis_for_current_attempt = analysis_doc
                     break
