@@ -5,13 +5,13 @@
 _SKILLS_DATA = {
     # Web Development
     'Frontend Developer': [
-        'HTML', 'HTML5', 'CSS', 'CSS3', 'JavaScript (ES6+)', 'Responsive Design', 'React.js', 'Angular', 'Vue.js', 'Bootstrap', 'Version Control (Git)', 'Browser Developer Tools', 'DOM Manipulation', 'API Integration (REST)', 'Debugging'
+        'HTML', 'CSS', 'JavaScript (ES6+)', 'Responsive Design', 'React.js', 'Angular', 'Vue.js', 'Bootstrap', 'Git', 'Browser Developer Tools', 'DOM Manipulation', 'API Integration (REST)', 'Debugging'
     ],
     'Backend Developer': [
-        'JavaScript (Node.js)', 'Python (Django)', 'Java (Spring Boot)', 'C# (.NET)', 'Express.js', 'Django', 'Spring Boot', 'ASP.NET Core', 'SQL', 'NoSQL Databases (MySQL, PostgreSQL, MongoDB)', 'REST API Development', 'Git Version Control', 'Authentication and Authorization', 'Basic Cloud or Deployment (Heroku, AWS)', 'Unit Testing'
+        'JavaScript (Node.js)', 'Python (Django)', 'Java (Spring Boot)', 'C# (.NET)', 'Express.js', 'Django', 'Spring Boot', 'ASP.NET Core', 'SQL', 'NoSQL Databases', 'REST API Development', 'Git', 'Authentication and Authorization', 'Basic Cloud or Deployment (Heroku, AWS)', 'Unit Testing'
     ],
     'Full-Stack Developer': [
-        'HTML5', 'CSS3', 'JavaScript', 'React.js', 'Angular', 'Vue.js', 'Node.js', 'Django', 'Spring Boot', 'ASP.NET Core', 'RESTful APIs', 'SQL', 'NoSQL Databases', 'Responsive Web Design', 'Version Control (Git)', 'Basic Testing (Jest, Mocha, JUnit)', 'Cross-functional Collaboration'
+        'HTML', 'CSS', 'JavaScript', 'React.js', 'Angular', 'Vue.js', 'Node.js', 'Django', 'Spring Boot', 'ASP.NET Core', 'REST APIs', 'SQL', 'NoSQL Databases', 'Responsive Design', 'Git', 'Basic Testing (Jest, Mocha, JUnit)', 'Cross-functional Collaboration'
     ],
     'UI/UX Developer': [
         'Wireframing and Prototyping', 'User Interface (UI) Design', 'User Experience (UX) Principles', 'Figma', 'Adobe XD', 'HTML', 'CSS', 'JavaScript (basic)', 'Responsive Design', 'Accessibility (WCAG)', 'Usability Testing'
@@ -19,7 +19,7 @@ _SKILLS_DATA = {
     
     # Mobile Development
     'Android Developer': [
-        'Kotlin', 'Java', 'Android SDK', 'Android Studio', 'XML/JSON', 'RESTful APIs', 'SQLite', 'UI/UX Design', 'Material Design', 'Git', 'Unit Testing'
+        'Kotlin', 'Java', 'Android SDK', 'Android Studio', 'XML/JSON', 'REST APIs', 'SQLite', 'UI/UX Design', 'Material Design', 'Git', 'Unit Testing'
     ],
     'iOS Developer': [
         'Swift', 'Objective-C', 'iOS SDK', 'Xcode', 'UIKit', 'Auto Layout', 'Storyboarding', 'REST APIs', 'Core Data', 'Git', 'Unit Testing'
@@ -36,16 +36,16 @@ _SKILLS_DATA = {
         'Business Intelligence', 'SQL', 'Data Visualization (Tableau, Power BI)', 'ETL', 'Dashboard Development', 'Data Modeling', 'Reporting', 'Data Mining', 'Critical Thinking'
     ],
     'Data Engineer': [
-        'Data Engineering', 'SQL', 'ETL Pipelines', 'Python', 'Scala', 'Java', 'Data Warehousing', 'Cloud Platforms (AWS, Azure, GCP)', 'Big Data (Hadoop, Spark)', 'Database Design', 'Git'
+        'Data Engineering', 'SQL', 'ETL', 'Python', 'Scala', 'Java', 'Data Warehousing', 'Cloud Platforms', 'Big Data (Hadoop, Spark)', 'Database Design', 'Git'
     ],
     'Big Data Engineer': [
-        'Hadoop', 'Spark', 'Kafka', 'SQL', 'NoSQL Databases (MongoDB, Cassandra)', 'Data Pipelines', 'ETL', 'Python', 'Java', 'Scala', 'Cloud Platforms', 'Data Modeling'
+        'Hadoop', 'Spark', 'Kafka', 'SQL', 'NoSQL Databases', 'Data Pipelines', 'ETL', 'Python', 'Java', 'Scala', 'Cloud Platforms', 'Data Modeling'
     ],
     'Junior Data Scientist': [
-        'Python', 'Machine Learning', 'SQL', 'Data Analysis', 'Data Visualization', 'Statistics', 'Scikit-learn', 'Data Cleaning', 'Communication Skills'
+        'Python', 'Machine Learning', 'SQL', 'Data Analysis', 'Data Visualization', 'Statistics', 'scikit-learn', 'Data Cleaning', 'Communication Skills'
     ],
     'Data Scientist': [
-        'Python', 'R', 'Machine Learning', 'Deep Learning', 'SQL', 'Statistics', 'Data Visualization', 'Scikit-learn', 'TensorFlow', 'PyTorch', 'Feature Engineering', 'Model Evaluation'
+        'Python', 'R', 'Machine Learning', 'Deep Learning', 'SQL', 'Statistics', 'Data Visualization', 'scikit-learn', 'TensorFlow', 'PyTorch', 'Feature Engineering', 'Model Evaluation'
     ],
     
     # AI & ML
@@ -73,13 +73,13 @@ _SKILLS_DATA = {
     
     # Cloud & DevOps
     'Cloud Engineer': [
-        'AWS', 'Microsoft Azure', 'Google Cloud Platform (GCP)', 'EC2', 'S3', 'Lambda', 'VM', 'Blob Storage (platform services)', 'Cloud Architecture', 'Bash', 'Python', 'Terraform', 'CloudFormation', 'Linux Systems', 'Git Version Control', 'Monitoring Tools (CloudWatch, Azure Monitor)', 'Troubleshooting'
+        'AWS', 'Microsoft Azure', 'Google Cloud Platform (GCP)', 'EC2', 'S3', 'Lambda', 'VM', 'Blob Storage (platform services)', 'Cloud Architecture', 'Bash', 'Python', 'Terraform', 'CloudFormation', 'Linux Systems', 'Git', 'Monitoring Tools (CloudWatch, Azure Monitor)', 'Troubleshooting'
     ],
     'DevOps Engineer': [
         'CI/CD Pipelines (Jenkins, GitLab CI)', 'Docker', 'Kubernetes', 'Infrastructure as Code (Terraform/Ansible)', 'Scripting (Bash/Python)', 'Linux Administration', 'Git', 'Monitoring/Logging (Prometheus, Grafana, ELK Stack)'
     ],
     'Site Reliability Engineer (SRE)': [
-        'Monitoring & Incident Response', 'Automation (Python, Bash)', 'Cloud Platforms (AWS/Azure/GCP)', 'Docker/Kubernetes', 'Reliability Engineering', 'Linux/Unix Systems', 'Troubleshooting'
+        'Monitoring & Incident Response', 'Automation (Python, Bash)', 'Cloud Platforms', 'Docker/Kubernetes', 'Reliability Engineering', 'Linux/Unix Systems', 'Troubleshooting'
     ],
     
     # Cybersecurity
