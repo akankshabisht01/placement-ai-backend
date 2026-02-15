@@ -12905,10 +12905,13 @@ def get_skill_ratings(mobile):
         mapping_doc = skill_mapping_col.find_one({'_id': mobile_id})
         
         if not mapping_doc or 'months' not in mapping_doc:
+            # No tests taken yet - still return job role skills so "Skills You Can Develop" shows them
             return jsonify({
                 'success': True,
-                'message': 'No skill mappings found',
-                'skillRatings': {}
+                'message': 'No skill mappings found - user has not taken any tests yet',
+                'skillRatings': {},
+                'jobRole': job_role,
+                'jobRoleSkills': job_role_available_skills  # Important: Include skills for "Skills You Can Develop"
             }), 200
         
         # Get all weekly test results for this user from Weekly_test_analysis collection
