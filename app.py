@@ -7105,6 +7105,92 @@ def check_quiz_test(mobile):
         }), 500
 
 
+@app.route('/api/check-quiz-test-completed/<mobile>', methods=['GET'])
+def check_quiz_test_completed(mobile):
+    """
+    Check if user has COMPLETED the skills test by checking quiz_test_answers collection.
+    This is different from check-quiz-test which only checks if test was GENERATED.
+    Returns True only if user has submitted their answers.
+    """
+    try:
+        mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
+        if not mongo_uri:
+            return jsonify({
+                'success': False,
+                'completed': False,
+                'error': 'MongoDB URI not configured'
+            }), 500
+            
+        client = MongoClient(mongo_uri)
+        db = client[os.getenv("MONGODB_DB_N8N", "n8n")]
+        collection = db["quiz_test_answers"]  # Check answers collection, not quiz_test
+        
+        # Build mobile variants
+        candidates = []
+        orig = mobile
+        candidates.append(orig)
+        candidates.append(orig.replace(' ', ''))
+        candidates.append(orig.replace('+', ''))
+        digits = ''.join([c for c in orig if c.isdigit()])
+        candidates.append(digits)
+        
+        if len(digits) >= 10:
+            last10 = digits[-10:]
+            candidates.append(last10)
+            candidates.append(f"+91 {last10}")
+            candidates.append(f"+91{last10}")
+            candidates.append(f"91{last10}")
+            candidates.append(f"91 {last10}")
+        
+        # Remove duplicates
+        seen = set()
+        uniq = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                uniq.append(c)
+
+        # Check if answers exist for any variant
+        answers_doc = None
+        matched_variant = None
+        for cand in uniq:
+            # Try _id first
+            answers_doc = collection.find_one({"_id": cand})
+            if answers_doc:
+                matched_variant = cand
+                break
+            # Try mobile field
+            answers_doc = collection.find_one({"mobile": cand})
+            if answers_doc:
+                matched_variant = cand
+                break
+
+        if answers_doc:
+            print(f"✅ Quiz test COMPLETED - answers found for {mobile} (matched: {matched_variant})")
+            return jsonify({
+                'success': True,
+                'completed': True,
+                'message': 'User has completed the skills test'
+            }), 200
+        else:
+            print(f"❌ Quiz test NOT completed - no answers found for {mobile}")
+            return jsonify({
+                'success': True,
+                'completed': False,
+                'message': 'User has not completed the skills test yet'
+            }), 200
+        
+    except Exception as e:
+        print(f"❌ Error checking quiz_test_answers: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'completed': False,
+            'error': str(e)
+        }), 500
+
+
 @app.route('/api/generate-test', methods=['POST'])
 def generate_test():
     """
