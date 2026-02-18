@@ -13333,6 +13333,69 @@ def get_skill_ratings(mobile):
         print(f"Skills not yet tested: {len([s for s in filtered_skill_ratings.values() if s['weeksTested'] == 0])}")
         print(f"{'='*80}\n")
         
+        # =========================================================================
+        # BONUS STAR: Check monthly test performance for 4th star
+        # If user scores >75% on monthly test, add +1 star to all skills in that month
+        # =========================================================================
+        print(f"\n{'='*80}")
+        print(f"⭐ CHECKING MONTHLY TEST BONUS STAR")
+        print(f"{'='*80}")
+        
+        monthly_result_col = db['monthly_test_result']
+        
+        # Find all monthly test results for this user
+        monthly_results = []
+        for variant in unique_variants:
+            results = list(monthly_result_col.find({'$or': [
+                {'_id': variant},
+                {'mobile': variant}
+            ]}))
+            if results:
+                monthly_results.extend(results)
+                break
+        
+        # Build set of months where user scored >75%
+        bonus_months = set()
+        for result in monthly_results:
+            month = result.get('month')
+            score_pct = result.get('scorePercentage', 0)
+            
+            print(f"   Month {month}: {score_pct}%")
+            
+            if score_pct >= 75:
+                bonus_months.add(month)
+                print(f"      ✅ Qualifies for bonus star!")
+        
+        print(f"\nBonus months (>75%): {bonus_months}")
+        
+        # Add bonus star to skills covered in qualifying months
+        if bonus_months and months_data:
+            for month_key, skill_map in months_data.items():
+                try:
+                    month_num = int(month_key.split('_')[1])
+                except:
+                    continue
+                
+                if month_num in bonus_months:
+                    # Add bonus star to all skills in this month
+                    for skill_name in skill_map.keys():
+                        # Handle combined skills
+                        skills_to_update = [skill_name]
+                        if ' & ' in skill_name:
+                            skills_to_update = [s.strip() for s in skill_name.split(' & ')]
+                        
+                        for skill in skills_to_update:
+                            # Check if skill is in filtered_skill_ratings (job role skills)
+                            if skill in filtered_skill_ratings:
+                                current_stars = filtered_skill_ratings[skill].get('stars', 0)
+                                new_stars = min(4, current_stars + 1)  # Cap at 4
+                                filtered_skill_ratings[skill]['stars'] = new_stars
+                                filtered_skill_ratings[skill]['hasMonthlyBonus'] = True
+                                filtered_skill_ratings[skill]['bonusMonth'] = month_num
+                                print(f"   ⭐ {skill}: {current_stars} → {new_stars} stars (monthly bonus)")
+        
+        print(f"{'='*80}\n")
+        
         return jsonify({
             'success': True,
             'skillRatings': filtered_skill_ratings,
