@@ -13060,7 +13060,7 @@ def get_skill_ratings(mobile):
         def get_skill_score(skill_name, skill_performance_dict):
             """
             Find the percentage for a specific skill by matching against topic names in skillPerformance.
-            Uses semantic similarity (sentence embeddings) for intelligent matching.
+            Uses simple string matching (case-insensitive, partial match).
             
             Args:
                 skill_name: The skill to find (e.g., "Machine Learning", "scikit-learn")
@@ -13077,51 +13077,44 @@ def get_skill_ratings(mobile):
             if skill_name in skill_performance_dict:
                 return skill_performance_dict[skill_name].get('percentage', 0), skill_name
             
-            # Use semantic similarity for intelligent matching
-            try:
-                from sentence_transformers import SentenceTransformer, util
-                import torch
-                
-                # Initialize model (will be cached after first use)
-                if not hasattr(get_skill_score, 'model'):
-                    print("      📦 Loading semantic matching model (one-time)...")
-                    get_skill_score.model = SentenceTransformer('all-MiniLM-L6-v2')
-                    get_skill_score.cache = {}
-                    print("      ✅ Model loaded")
-                
-                model = get_skill_score.model
-                cache = get_skill_score.cache
-                
-                # Get embedding for the skill (with caching)
-                if skill_name not in cache:
-                    cache[skill_name] = model.encode(skill_name, convert_to_tensor=True)
-                skill_embedding = cache[skill_name]
-                
-                # Get all topic names from skillPerformance dict
-                topic_names = list(skill_performance_dict.keys())
-                if not topic_names:
-                    return None, None
-                
-                # Get embeddings for all topics
-                topic_embeddings = model.encode(topic_names, convert_to_tensor=True)
-                
-                # Calculate cosine similarities
-                similarities = util.cos_sim(skill_embedding, topic_embeddings)[0]
-                
-                # Find best match above threshold
-                max_sim_idx = torch.argmax(similarities).item()
-                max_similarity = similarities[max_sim_idx].item()
-                
-                # Threshold: 0.3 = loose match (ML concepts), 0.5 = medium, 0.7 = strict
-                if max_similarity > 0.3:
-                    best_match_topic_name = topic_names[max_sim_idx]
-                    # Get the percentage from the matched topic
-                    best_score_val = skill_performance_dict[best_match_topic_name].get('percentage', 0)
-                    print(f"      🔗 '{skill_name}' → '{best_match_topic_name}' (similarity: {max_similarity:.2f}, score: {best_score_val}%)")
-                    return best_score_val, best_match_topic_name
+            # Try case-insensitive exact match
+            skill_lower = skill_name.lower()
+            for topic, data in skill_performance_dict.items():
+                if topic.lower() == skill_lower:
+                    return data.get('percentage', 0), topic
             
-            except Exception as e:
-                print(f"      ⚠️  Semantic matching error: {str(e)}")
+            # Try partial matching (skill name contained in topic or vice versa)
+            best_match = None
+            best_score = None
+            best_match_len = 0
+            
+            for topic, data in skill_performance_dict.items():
+                topic_lower = topic.lower()
+                # Check if skill is part of topic or topic is part of skill
+                if skill_lower in topic_lower or topic_lower in skill_lower:
+                    # Prefer longer matches (more specific)
+                    match_len = min(len(skill_lower), len(topic_lower))
+                    if match_len > best_match_len:
+                        best_match = topic
+                        best_score = data.get('percentage', 0)
+                        best_match_len = match_len
+            
+            if best_match:
+                print(f"      🔗 '{skill_name}' → '{best_match}' (partial match)")
+                return best_score, best_match
+            
+            # Try word-based matching (any word overlap)
+            skill_words = set(skill_lower.replace('-', ' ').replace('_', ' ').split())
+            for topic, data in skill_performance_dict.items():
+                topic_words = set(topic.lower().replace('-', ' ').replace('_', ' ').split())
+                # Check for significant word overlap (at least one meaningful word)
+                common_words = skill_words & topic_words
+                # Filter out common stop words
+                stop_words = {'and', 'the', 'a', 'an', 'of', 'in', 'for', 'to', 'with', 'on', '-'}
+                meaningful_common = common_words - stop_words
+                if meaningful_common and len(meaningful_common) >= 1:
+                    print(f"      🔗 '{skill_name}' → '{topic}' (word match: {meaningful_common})")
+                    return data.get('percentage', 0), topic
             
             return None, None
         
