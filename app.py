@@ -13139,11 +13139,15 @@ def get_skill_ratings(mobile):
             
             # skill_map is like: {"Python": [1, 2, 3], "Machine Learning": [4], ...}
             # OR old format: {"Python": 4, "Machine Learning & scikit-learn": 4}
-            # The array contains week numbers where that skill is taught
+            # When value is 4 (single number), it typically means "all 4 weeks" not "week 4"
             for skill_name, week_numbers in skill_map.items():
                 # Ensure week_numbers is a list
                 if isinstance(week_numbers, int):
-                    week_numbers = [week_numbers]  # Convert single number to array
+                    # If value is 4, it means skill is covered in all 4 weeks
+                    if week_numbers == 4:
+                        week_numbers = [1, 2, 3, 4]  # All weeks in the month
+                    else:
+                        week_numbers = [week_numbers]  # Single week
                 elif not isinstance(week_numbers, list):
                     continue  # Skip invalid data
                 
@@ -13160,8 +13164,11 @@ def get_skill_ratings(mobile):
                         week_sources = []  # Track if we used skill-specific or overall score
                         
                         for week_num in week_numbers:
-                            if (month_num, week_num) in week_data:
-                                week_info = week_data[(month_num, week_num)]
+                            # Convert relative week (1-4 within month) to absolute week (5,6,7,8 for month 2)
+                            # skill_week_mapping uses relative weeks, Weekly_test_analysis uses absolute
+                            absolute_week = (month_num - 1) * 4 + week_num
+                            if (month_num, absolute_week) in week_data:
+                                week_info = week_data[(month_num, absolute_week)]
                                 
                                 # Try to get skill-specific score from skillPerformance (actual weighted %)
                                 skill_score, matched_topic = get_skill_score(individual_skill, week_info.get('skillPerformance', {}))
@@ -13212,8 +13219,11 @@ def get_skill_ratings(mobile):
                     week_sources = []  # Track if we used skill-specific or overall score
                     
                     for week_num in week_numbers:
-                        if (month_num, week_num) in week_data:
-                            week_info = week_data[(month_num, week_num)]
+                        # Convert relative week (1-4 within month) to absolute week (5,6,7,8 for month 2)
+                        # skill_week_mapping uses relative weeks, Weekly_test_analysis uses absolute
+                        absolute_week = (month_num - 1) * 4 + week_num
+                        if (month_num, absolute_week) in week_data:
+                            week_info = week_data[(month_num, absolute_week)]
                             
                             # Try to get skill-specific score from skillPerformance (actual weighted %)
                             skill_score, matched_topic = get_skill_score(skill_name, week_info.get('skillPerformance', {}))
@@ -16662,29 +16672,34 @@ if __name__ == '__main__':
     # Ensure loading questions/facts are populated
     ensure_loading_content_populated()
     
-    # Start the chatbot API in a separate process (DISABLED for testing)
-    # def start_chatbot_api():
-    #     try:
-    #         print("🤖 Starting Chatbot API on port 5001...")
-    #         chatbot_process = subprocess.Popen(
-    #             [sys.executable, 'chatbot_api.py'],
-    #             cwd=os.path.dirname(os.path.abspath(__file__)),
-    #             stdout=subprocess.PIPE,
-    #             stderr=subprocess.STDOUT,
-    #             text=True
-    #         )
-    #         # Stream chatbot output
-    #         for line in chatbot_process.stdout:
-    #             print(f"[Chatbot] {line.strip()}")
-    #     except Exception as e:
-    #         print(f"❌ Failed to start Chatbot API: {e}")
+    # Start the chatbot API in a separate process with improved reliability
+    def start_chatbot_api():
+        try:
+            print("🤖 Starting Chatbot API on port 5001...")
+            print("   - Automatic reconnection enabled")
+            print("   - Periodic health checks (every 30s)")
+            print("   - Extended connection timeouts (5 min)")
+            chatbot_process = subprocess.Popen(
+                [sys.executable, 'chatbot_api.py'],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1  # Line buffered
+            )
+            # Stream chatbot output
+            for line in chatbot_process.stdout:
+                print(f"[Chatbot] {line.strip()}")
+        except Exception as e:
+            print(f"❌ Failed to start Chatbot API: {e}")
     
-    # Start chatbot in background thread (DISABLED for testing)
-    # chatbot_thread = threading.Thread(target=start_chatbot_api, daemon=True)
-    # chatbot_thread.start()
+    # Start chatbot in background thread
+    chatbot_thread = threading.Thread(target=start_chatbot_api, daemon=True)
+    chatbot_thread.start()
     
-    # Give chatbot time to start (increased for MongoDB Atlas connection)
-    # time.sleep(3)
+    # Give chatbot time to start and connect to MongoDB
+    print("⏳ Waiting for Chatbot API to initialize...")
+    time.sleep(5)
     
     # Use PORT environment variable for Railway/production deployment
     port = int(os.environ.get('PORT', 5000))
