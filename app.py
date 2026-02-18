@@ -13328,16 +13328,20 @@ def get_skill_ratings(mobile):
         
         # =========================================================================
         # BONUS STAR: Check monthly test performance for 4th star
-        # If user scores >75% on monthly test, add +1 star to all skills in that month
+        # If user scores >=75% on monthly test, add +1 star to all skills in that month
         # =========================================================================
         print(f"\n{'='*80}")
         print(f"⭐ CHECKING MONTHLY TEST BONUS STAR")
         print(f"{'='*80}")
         
+        # Check both monthly_test_result AND monthly_test_analysis collections
         monthly_result_col = db['monthly_test_result']
+        monthly_analysis_col = db['monthly_test_analysis']
         
-        # Find all monthly test results for this user
+        # Find all monthly test results for this user from both collections
         monthly_results = []
+        
+        # Check monthly_test_result first
         for variant in unique_variants:
             results = list(monthly_result_col.find({'$or': [
                 {'_id': variant},
@@ -13345,7 +13349,30 @@ def get_skill_ratings(mobile):
             ]}))
             if results:
                 monthly_results.extend(results)
+                print(f"   Found {len(results)} results in monthly_test_result")
                 break
+        
+        # Also check monthly_test_analysis (which may have more complete records)
+        for variant in unique_variants:
+            # monthly_test_analysis uses _id format like "+91 9084117332_month_1_1"
+            results = list(monthly_analysis_col.find({'mobile': variant}))
+            if results:
+                # Add these to monthly_results if not already present
+                existing_months = {r.get('month') for r in monthly_results}
+                for r in results:
+                    if r.get('month') not in existing_months:
+                        # Extract percentage from rawTestData
+                        raw_data = r.get('rawTestData', {})
+                        percentage = raw_data.get('percentage', 0)
+                        monthly_results.append({
+                            'month': r.get('month'),
+                            'percentage': percentage,
+                            'source': 'monthly_test_analysis'
+                        })
+                print(f"   Found {len(results)} results in monthly_test_analysis")
+                break
+        
+        print(f"   Total monthly results found: {len(monthly_results)}")
         
         # Build set of months where user scored >=75%
         bonus_months = set()
