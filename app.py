@@ -13378,7 +13378,7 @@ def get_skill_ratings(mobile):
                     continue
                 
                 if month_num in bonus_months:
-                    # Add bonus star to all skills in this month
+                    # Mark all skills in this month as having monthly bonus
                     for skill_name in skill_map.keys():
                         # Handle combined skills
                         skills_to_update = [skill_name]
@@ -13388,12 +13388,10 @@ def get_skill_ratings(mobile):
                         for skill in skills_to_update:
                             # Check if skill is in filtered_skill_ratings (job role skills)
                             if skill in filtered_skill_ratings:
-                                current_stars = filtered_skill_ratings[skill].get('stars', 0)
-                                new_stars = min(4, current_stars + 1)  # Cap at 4
-                                filtered_skill_ratings[skill]['stars'] = new_stars
+                                # Don't add to stars, just mark as having monthly bonus
                                 filtered_skill_ratings[skill]['hasMonthlyBonus'] = True
                                 filtered_skill_ratings[skill]['bonusMonth'] = month_num
-                                print(f"   ⭐ {skill}: {current_stars} → {new_stars} stars (monthly bonus)")
+                                print(f"   ⭐ {skill}: monthly bonus earned (month {month_num})")
         
         print(f"{'='*80}\n")
         
