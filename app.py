@@ -13347,7 +13347,7 @@ def get_skill_ratings(mobile):
                 monthly_results.extend(results)
                 break
         
-        # Build set of months where user scored >75%
+        # Build set of months where user scored >=75%
         bonus_months = set()
         for result in monthly_results:
             month = result.get('month')
@@ -13360,7 +13360,7 @@ def get_skill_ratings(mobile):
                 bonus_months.add(month)
                 print(f"      ✅ Qualifies for bonus star!")
         
-        print(f"\nBonus months (>75%): {bonus_months}")
+        print(f"\nBonus months (>=75%): {bonus_months}")
         
         # Add bonus star to skills covered in qualifying months
         if bonus_months and months_data:
