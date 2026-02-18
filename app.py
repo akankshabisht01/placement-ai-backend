@@ -13358,7 +13358,8 @@ def get_skill_ratings(mobile):
         bonus_months = set()
         for result in monthly_results:
             month = result.get('month')
-            score_pct = result.get('scorePercentage', 0)
+            # Support both scorePercentage and percentage field names
+            score_pct = result.get('scorePercentage') or result.get('percentage', 0)
             
             print(f"   Month {month}: {score_pct}%")
             
