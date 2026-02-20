@@ -15,6 +15,7 @@ from utils.db import save_parsed_resume, save_candidate_prediction, get_db, norm
 from utils.suggestions import generate_suggestions
 from utils.otp_service import otp_service
 from utils.mock_otp_service import mock_otp_service
+from utils.resend_otp_service import resend_otp_service
 from utils.student_analysis import save_student_analysis_safe, bulk_sync_resumes_to_analysis, sync_resume_to_student_analysis
 from utils.validators import validate_prediction_input, sanitize_text_input, deduplicate_skills
 from utils.error_handler import (
@@ -73,19 +74,21 @@ import threading
 _weekly_plan_locks = {}
 _weekly_plan_lock_mutex = threading.Lock()
 
-# Check if Gmail is properly configured
+# Check which OTP service to use (priority: Resend > Gmail > Mock)
+resend_api_key = os.getenv('RESEND_API_KEY', '')
 email_password = os.getenv('EMAIL_PASSWORD', '')
-use_mock_otp = (not email_password or 
-                email_password in ['your-app-password', 'your-gmail-app-password-here', 'Launchpad03'])
 
-if use_mock_otp:
-    print("⚠️  Using Mock OTP Service (Gmail not configured)")
-    print("📧 All OTPs will be: 123456")
-    print("🔧 To enable real emails, set up Gmail App Password in .env")
-    active_otp_service = mock_otp_service
-else:
-    print("✅ Using Real Gmail OTP Service")
+if resend_api_key:
+    print("✅ Using Resend Email API Service")
+    active_otp_service = resend_otp_service
+elif email_password and email_password not in ['your-app-password', 'your-gmail-app-password-here', 'Launchpad03']:
+    print("✅ Using Gmail SMTP Service")
     active_otp_service = otp_service
+else:
+    print("⚠️  Using Mock OTP Service (no email service configured)")
+    print("📧 All OTPs will be: 123456")
+    print("🔧 To enable emails, set RESEND_API_KEY in Railway variables")
+    active_otp_service = mock_otp_service
 
 app = Flask(__name__)
 # Limit uploaded file size to 10MB
