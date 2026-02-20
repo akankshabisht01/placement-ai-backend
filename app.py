@@ -4771,13 +4771,15 @@ def verify_otp():
 @app.route('/api/debug-otp-config', methods=['GET'])
 def debug_otp_config():
     """Debug endpoint to check OTP service configuration"""
+    resend_key = os.getenv('RESEND_API_KEY', '')
     email_pwd = os.getenv('EMAIL_PASSWORD', '')
     return jsonify({
+        'resend_api_key_set': bool(resend_key),
+        'resend_api_key_length': len(resend_key),
+        'resend_api_key_prefix': resend_key[:6] + '...' if len(resend_key) > 6 else 'not set',
         'email_password_set': bool(email_pwd),
-        'email_password_length': len(email_pwd),
-        'using_mock_otp': use_mock_otp,
-        'active_service': 'mock' if use_mock_otp else 'gmail',
-        'sender_email': 'placementprediction007@gmail.com'
+        'active_service_type': type(active_otp_service).__name__,
+        'resend_from_email': os.getenv('RESEND_FROM_EMAIL', 'Placement AI <onboarding@resend.dev>')
     })
 
 @app.route('/api/save-registration', methods=['POST'])

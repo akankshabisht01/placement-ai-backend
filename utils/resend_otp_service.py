@@ -27,8 +27,12 @@ class ResendOTPService:
     def send_otp(self, recipient_email, user_name="User"):
         """Send OTP via Resend email API"""
         try:
+            print(f"[Resend] Starting send_otp to {recipient_email}")
+            print(f"[Resend] API key set: {bool(self.api_key)}, length: {len(self.api_key)}")
+            
             # Check if API key is configured
             if not self.api_key:
+                print("[Resend] ERROR: API key not configured")
                 return {
                     'success': False,
                     'message': 'Resend API key not configured'
@@ -36,9 +40,11 @@ class ResendOTPService:
             
             # Configure Resend
             resend.api_key = self.api_key
+            print(f"[Resend] Using from_email: {self.from_email}")
             
             # Generate OTP
             otp = self.generate_otp()
+            print(f"[Resend] Generated OTP: {otp}")
             
             # Store OTP with expiry (5 minutes)
             expiry = datetime.now() + timedelta(minutes=5)
@@ -96,24 +102,29 @@ class ResendOTPService:
                 "html": html_body,
             }
             
+            print(f"[Resend] Sending email with params: from={params['from']}, to={params['to']}")
             response = resend.Emails.send(params)
+            print(f"[Resend] API Response: {response}")
             
             if response and response.get('id'):
-                print(f"Resend email sent successfully: {response['id']}")
+                print(f"[Resend] Email sent successfully: {response['id']}")
                 return {
                     'success': True,
                     'message': 'OTP sent successfully',
                     'expiry_minutes': 5
                 }
             else:
+                print(f"[Resend] Failed - response: {response}")
                 return {
                     'success': False,
                     'message': f'Failed to send email: {response}'
                 }
             
         except Exception as e:
+            import traceback
             error_msg = str(e)
-            print(f"Resend Error sending OTP: {error_msg}")
+            print(f"[Resend] ERROR: {error_msg}")
+            print(f"[Resend] Traceback: {traceback.format_exc()}")
             return {
                 'success': False,
                 'message': f'Failed to send OTP: {error_msg}'
