@@ -4757,6 +4757,18 @@ def verify_otp():
             'message': f'Error verifying OTP: {str(e)}'
         }), 500
 
+@app.route('/api/debug-otp-config', methods=['GET'])
+def debug_otp_config():
+    """Debug endpoint to check OTP service configuration"""
+    email_pwd = os.getenv('EMAIL_PASSWORD', '')
+    return jsonify({
+        'email_password_set': bool(email_pwd),
+        'email_password_length': len(email_pwd),
+        'using_mock_otp': use_mock_otp,
+        'active_service': 'mock' if use_mock_otp else 'gmail',
+        'sender_email': 'placementprediction007@gmail.com'
+    })
+
 @app.route('/api/save-registration', methods=['POST'])
 def save_registration():
     """Save user registration data to MongoDB"""
