@@ -4690,6 +4690,7 @@ def send_otp():
     """Send OTP to user's email"""
     try:
         data = request.get_json()
+        print(f"[OTP] Received send-otp request: {data}")
         
         if not data or 'email' not in data:
             return jsonify({
@@ -4699,6 +4700,8 @@ def send_otp():
         
         email = data.get('email').strip().lower()
         user_name = data.get('firstName', 'User')
+        print(f"[OTP] Sending to email: {email}, name: {user_name}")
+        print(f"[OTP] Active service type: {type(active_otp_service).__name__}")
         
         # Basic email validation
         if '@' not in email or '.' not in email:
@@ -4708,7 +4711,9 @@ def send_otp():
             }), 400
         
         # Send OTP
+        print(f"[OTP] Calling send_otp...")
         result = active_otp_service.send_otp(email, user_name)
+        print(f"[OTP] Result: {result}")
         
         if result['success']:
             return jsonify(result)
@@ -4716,6 +4721,9 @@ def send_otp():
             return jsonify(result), 500
             
     except Exception as e:
+        import traceback
+        print(f"[OTP] Exception: {str(e)}")
+        print(f"[OTP] Traceback: {traceback.format_exc()}")
         return jsonify({
             'success': False,
             'message': f'Error sending OTP: {str(e)}'
