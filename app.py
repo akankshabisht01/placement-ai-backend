@@ -115,6 +115,14 @@ import logging
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
+# Register Interview Routes Blueprint
+try:
+    from routes.interview_routes import interview_bp
+    app.register_blueprint(interview_bp)
+    print("✅ Interview routes registered")
+except Exception as e:
+    print(f"⚠️ Interview routes not loaded: {e}")
+
 # Allow common dev origins (localhost, 127.0.0.1, and LAN IPs) for the API
 # Broaden CORS for local development across any port/host on the LAN
 CORS(app, resources={
