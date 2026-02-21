@@ -4884,6 +4884,53 @@ def reset_password():
             'message': f'Error resetting password: {str(e)}'
         }), 500
 
+@app.route('/api/update-password', methods=['POST'])
+def update_password():
+    """Update user password directly (used after OTP is already verified in frontend)"""
+    try:
+        from utils.db import update_user_password
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'message': 'Request data is required'
+            }), 400
+        
+        email = data.get('email', '').strip().lower()
+        new_password = data.get('newPassword', '')
+        
+        if not email or not new_password:
+            return jsonify({
+                'success': False,
+                'message': 'Email and new password are required'
+            }), 400
+        
+        # Validate password length
+        if len(new_password) < 6:
+            return jsonify({
+                'success': False,
+                'message': 'Password must be at least 6 characters long'
+            }), 400
+        
+        # Update password
+        result = update_user_password(email, new_password)
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'message': 'Password updated successfully.'
+            })
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error updating password: {str(e)}'
+        }), 500
+
 @app.route('/api/debug-otp-config', methods=['GET'])
 def debug_otp_config():
     """Debug endpoint to check OTP service configuration"""
