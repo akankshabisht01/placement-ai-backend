@@ -4769,6 +4769,121 @@ def verify_otp():
             'message': f'Error verifying OTP: {str(e)}'
         }), 500
 
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    """Send OTP for password reset"""
+    try:
+        data = request.get_json()
+        print(f"[Forgot Password] Received request: {data}")
+        
+        if not data or 'email' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Email is required'
+            }), 400
+        
+        email = data.get('email').strip().lower()
+        print(f"[Forgot Password] Email: {email}")
+        
+        # Basic email validation
+        if '@' not in email or '.' not in email:
+            return jsonify({
+                'success': False,
+                'message': 'Please enter a valid email address'
+            }), 400
+        
+        # Check if user exists
+        from utils.db import get_collection
+        registration_col = get_collection("Registration")
+        user = registration_col.find_one({"email": email})
+        
+        if not user:
+            return jsonify({
+                'success': False,
+                'message': 'No account found with this email address'
+            }), 404
+        
+        user_name = user.get('firstName', 'User')
+        
+        # Send OTP for password reset
+        print(f"[Forgot Password] Sending OTP to {email}")
+        result = active_otp_service.send_otp(email, user_name)
+        print(f"[Forgot Password] Result: {result}")
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'message': 'Password reset OTP sent to your email'
+            })
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        import traceback
+        print(f"[Forgot Password] Exception: {str(e)}")
+        print(f"[Forgot Password] Traceback: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'message': f'Error sending reset OTP: {str(e)}'
+        }), 500
+
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    """Reset user password after OTP verification"""
+    try:
+        from utils.db import update_user_password
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'message': 'Request data is required'
+            }), 400
+        
+        email = data.get('email', '').strip().lower()
+        otp = data.get('otp', '').strip()
+        new_password = data.get('newPassword', '')
+        
+        if not email or not otp or not new_password:
+            return jsonify({
+                'success': False,
+                'message': 'Email, OTP, and new password are required'
+            }), 400
+        
+        # Validate password length
+        if len(new_password) < 6:
+            return jsonify({
+                'success': False,
+                'message': 'Password must be at least 6 characters long'
+            }), 400
+        
+        # Verify OTP first
+        otp_result = active_otp_service.verify_otp(email, otp)
+        
+        if not otp_result['success']:
+            return jsonify({
+                'success': False,
+                'message': otp_result.get('message', 'Invalid or expired OTP')
+            }), 400
+        
+        # Update password
+        result = update_user_password(email, new_password)
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'message': 'Password reset successfully. You can now sign in with your new password.'
+            })
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error resetting password: {str(e)}'
+        }), 500
+
 @app.route('/api/debug-otp-config', methods=['GET'])
 def debug_otp_config():
     """Debug endpoint to check OTP service configuration"""

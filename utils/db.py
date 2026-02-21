@@ -452,6 +452,60 @@ def verify_user_password(email_or_username, password):
         }
 
 
+def update_user_password(email, new_password):
+    """
+    Update user's password in the database
+    
+    Args:
+        email (str): User's email address
+        new_password (str): New password to set
+        
+    Returns:
+        dict: Result with success status and message
+    """
+    import hashlib
+    
+    try:
+        # Get the Registration collection
+        registration_col = get_collection("Registration")
+        
+        # Find user by email
+        user = registration_col.find_one({"email": email.strip().lower()})
+        
+        if not user:
+            return {
+                "success": False,
+                "message": "User not found"
+            }
+        
+        # Hash the new password
+        password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+        
+        # Update the password
+        result = registration_col.update_one(
+            {"email": email.strip().lower()},
+            {"$set": {"passwordHash": password_hash}}
+        )
+        
+        if result.modified_count > 0:
+            return {
+                "success": True,
+                "message": "Password updated successfully"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Failed to update password"
+            }
+            
+    except Exception as e:
+        print(f"Error updating password: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to update password: {str(e)}"
+        }
+
+
 def get_roadmap_collection():
     """Get the roadmaps collection"""
     return get_collection("roadmaps")
