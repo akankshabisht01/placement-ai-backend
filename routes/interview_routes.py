@@ -7,10 +7,22 @@ from datetime import datetime
 import os
 import json
 import requests
-from utils.db import get_db
-from bson import ObjectId
+
+# Lazy imports at function level to avoid import errors
+def get_db_lazy():
+    from utils.db import get_db
+    return get_db()
+
+def get_object_id(id_str):
+    from bson import ObjectId
+    return get_object_id(id_str)
 
 interview_bp = Blueprint('interview', __name__, url_prefix='/api/interview')
+
+# Health check endpoint
+@interview_bp.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "ok", "module": "interview"})
 
 # Perplexity API configuration
 PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
@@ -223,7 +235,7 @@ def end_interview():
         feedback = generate_interview_feedback(interview_session)
         
         # Save to database
-        db = get_db()
+        db = get_db_lazy()
         interview_data = {
             **interview_session.to_dict(),
             "ended_at": datetime.utcnow(),
@@ -254,7 +266,7 @@ def end_interview():
 def get_interview_history(phone_number):
     """Get interview history for a user"""
     try:
-        db = get_db()
+        db = get_db_lazy()
         interviews = list(db.interviews.find(
             {"phone_number": phone_number}
         ).sort("started_at", -1).limit(10))
@@ -283,8 +295,8 @@ def get_interview_history(phone_number):
 def get_interview_feedback(interview_id):
     """Get feedback for a specific interview"""
     try:
-        db = get_db()
-        interview = db.interviews.find_one({"_id": ObjectId(interview_id)})
+        db = get_db_lazy()
+        interview = db.interviews.find_one({"_id": get_object_id(interview_id)})
         
         if not interview:
             return jsonify({
