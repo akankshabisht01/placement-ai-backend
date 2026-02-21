@@ -16,6 +16,7 @@ from utils.suggestions import generate_suggestions
 from utils.otp_service import otp_service
 from utils.mock_otp_service import mock_otp_service
 from utils.resend_otp_service import resend_otp_service
+from utils.brevo_otp_service import brevo_otp_service
 from utils.student_analysis import save_student_analysis_safe, bulk_sync_resumes_to_analysis, sync_resume_to_student_analysis
 from utils.validators import validate_prediction_input, sanitize_text_input, deduplicate_skills
 from utils.error_handler import (
@@ -74,11 +75,15 @@ import threading
 _weekly_plan_locks = {}
 _weekly_plan_lock_mutex = threading.Lock()
 
-# Check which OTP service to use (priority: Resend > Gmail > Mock)
+# Check which OTP service to use (priority: Brevo > Resend > Gmail > Mock)
+brevo_api_key = os.getenv('BREVO_API_KEY', '')
 resend_api_key = os.getenv('RESEND_API_KEY', '')
 email_password = os.getenv('EMAIL_PASSWORD', '')
 
-if resend_api_key:
+if brevo_api_key:
+    print("✅ Using Brevo Email API Service")
+    active_otp_service = brevo_otp_service
+elif resend_api_key:
     print("✅ Using Resend Email API Service")
     active_otp_service = resend_otp_service
 elif email_password and email_password not in ['your-app-password', 'your-gmail-app-password-here', 'Launchpad03']:
@@ -87,7 +92,7 @@ elif email_password and email_password not in ['your-app-password', 'your-gmail-
 else:
     print("⚠️  Using Mock OTP Service (no email service configured)")
     print("📧 All OTPs will be: 123456")
-    print("🔧 To enable emails, set RESEND_API_KEY in Railway variables")
+    print("🔧 To enable emails, set BREVO_API_KEY in Railway variables")
     active_otp_service = mock_otp_service
 
 app = Flask(__name__)
@@ -4771,15 +4776,16 @@ def verify_otp():
 @app.route('/api/debug-otp-config', methods=['GET'])
 def debug_otp_config():
     """Debug endpoint to check OTP service configuration"""
+    brevo_key = os.getenv('BREVO_API_KEY', '')
     resend_key = os.getenv('RESEND_API_KEY', '')
     email_pwd = os.getenv('EMAIL_PASSWORD', '')
     return jsonify({
+        'brevo_api_key_set': bool(brevo_key),
+        'brevo_api_key_length': len(brevo_key),
         'resend_api_key_set': bool(resend_key),
-        'resend_api_key_length': len(resend_key),
-        'resend_api_key_prefix': resend_key[:6] + '...' if len(resend_key) > 6 else 'not set',
         'email_password_set': bool(email_pwd),
         'active_service_type': type(active_otp_service).__name__,
-        'resend_from_email': os.getenv('RESEND_FROM_EMAIL', 'Placement AI <onboarding@resend.dev>')
+        'brevo_from_email': os.getenv('BREVO_FROM_EMAIL', 'placementprediction007@gmail.com')
     })
 
 @app.route('/api/save-registration', methods=['POST'])
