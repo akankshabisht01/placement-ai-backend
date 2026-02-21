@@ -117,11 +117,23 @@ log.setLevel(logging.ERROR)
 
 # Register Interview Routes Blueprint
 try:
+    print("🔄 Attempting to import interview routes...")
     from routes.interview_routes import interview_bp
+    print("✅ Interview blueprint imported successfully")
     app.register_blueprint(interview_bp)
-    print("✅ Interview routes registered")
+    print("✅ Interview routes registered at /api/interview")
+    # List the registered routes
+    for rule in app.url_map.iter_rules():
+        if 'interview' in rule.endpoint:
+            print(f"  📍 {rule.rule} -> {rule.endpoint}")
+except ImportError as e:
+    print(f"❌ ImportError loading interview routes: {e}")
+    import traceback
+    traceback.print_exc()
 except Exception as e:
     print(f"⚠️ Interview routes not loaded: {e}")
+    import traceback
+    traceback.print_exc()
 
 # Allow common dev origins (localhost, 127.0.0.1, and LAN IPs) for the API
 # Broaden CORS for local development across any port/host on the LAN
