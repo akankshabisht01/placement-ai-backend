@@ -6,6 +6,8 @@ import tempfile
 import time
 import random
 import razorpay
+import subprocess
+import shutil
 from datetime import datetime, timedelta
 from models.ml_placement_model import MLPlacementPredictor
 from data.domain_data import get_domain_data
@@ -29,6 +31,15 @@ from dotenv import load_dotenv
 import requests
 import zipfile
 import io
+import sys
+
+# Fix Windows console UTF-8 encoding for emoji support
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except:
+        pass  # Python < 3.7 doesn't have reconfigure
 
 load_dotenv()  # Load env vars like PERPLEXITY_API_KEY
 
@@ -113,14 +124,6 @@ CORS(app, resources={
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
-
-# Add CORS headers to all responses
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
 
 # Initialize the ML-based placement predictor
 predictor = MLPlacementPredictor()
@@ -4752,13 +4755,6 @@ def verify_otp():
         email = data.get('email').strip().lower()
         otp = data.get('otp').strip()
         
-        # TEMPORARY: Accept 123456 as bypass OTP while Gmail service is down
-        if otp == '123456':
-            return jsonify({
-                'success': True,
-                'message': 'OTP verified successfully (bypass mode)'
-            })
-        
         # Verify OTP
         result = active_otp_service.verify_otp(email, otp)
         
@@ -5916,7 +5912,7 @@ Return ONLY valid JSON. Use course numbers (1-{len(courses)}) from the list abov
         }
         
         payload = {
-            'model': 'sonar',
+            'model': 'llama-3.1-sonar-large-128k-chat',
             'messages': [
                 {
                     'role': 'system',
@@ -6189,7 +6185,7 @@ Return ONLY valid JSON. Extract topics from the available course topics list abo
         }
         
         payload = {
-            'model': 'sonar',
+            'model': 'llama-3.1-sonar-large-128k-chat',
             'messages': [
                 {'role': 'system', 'content': 'You are a curriculum designer. Always return valid JSON.'},
                 {'role': 'user', 'content': prompt}
@@ -6551,7 +6547,7 @@ def _analyze_roadmap_for_skill_completion(organized_weeks, month_number):
                 }
                 
                 payload = {
-                    'model': 'sonar',
+                    'model': 'llama-3.1-sonar-large-128k-chat',
                     'messages': [
                         {'role': 'system', 'content': 'You are a curriculum expert. Always respond with valid JSON only.'},
                         {'role': 'user', 'content': extraction_prompt}
@@ -6632,7 +6628,7 @@ def _analyze_roadmap_for_skill_completion(organized_weeks, month_number):
         }
         
         payload = {
-            'model': 'sonar',
+            'model': 'llama-3.1-sonar-large-128k-chat',
             'messages': [
                 {
                     'role': 'system',
@@ -6836,7 +6832,7 @@ Weekly Plan:
         }
         
         payload = {
-            'model': 'sonar',
+            'model': 'llama-3.1-sonar-large-128k-chat',
             'messages': [
                 {
                     'role': 'system',
@@ -6979,7 +6975,7 @@ Return ONLY valid JSON with course numbers."""
     }
     
     payload = {
-        'model': 'sonar',
+        'model': 'llama-3.1-sonar-large-128k-chat',
         'messages': [
             {'role': 'system', 'content': 'You are a course evaluator. Always return valid JSON.'},
             {'role': 'user', 'content': prompt}
@@ -13885,6 +13881,435 @@ Example: If the project is "Sales Dashboard", mention "Connect to sales database
         }), 500
 
 
+@app.route('/api/generate-project-description', methods=['POST'])
+def generate_project_description():
+    """
+    Generate project description from uploaded files and title using AI.
+    
+    Expected payload (FormData):
+    - title: project title (required)
+    - files[]: uploaded files (optional)
+    - mobile: user mobile number (optional, for getting learned skills)
+    
+    Returns AI-generated project description.
+    """
+    try:
+        # Get project title
+        project_title = request.form.get('title', '')
+        
+        if not project_title:
+            return jsonify({
+                'success': False,
+                'message': 'Project title is required'
+            }), 400
+        
+        mobile = request.form.get('mobile', '')
+        
+        print(f"\n=== Generating Description for Project ===")
+        print(f"📋 Title: {project_title}")
+        
+        # Analyze uploaded files
+        files_analysis = []
+        uploaded_files_info = []
+        
+        if request.files:
+            file_list = request.files.getlist('files[]')
+            
+            if len(file_list) > 10:
+                return jsonify({
+                    'success': False,
+                    'message': 'Maximum 10 files allowed'
+                }), 400
+            
+            for idx, file in enumerate(file_list):
+                if file and file.filename:
+                    filename = file.filename
+                    file_ext = '.' + filename.split('.')[-1].lower() if '.' in filename else ''
+                    file_data = file.read()
+                    file_size = len(file_data)
+                    
+                    print(f"📄 File {idx+1}: {filename} ({file_size} bytes)")
+                    
+                    file_info = {
+                        'filename': filename,
+                        'extension': file_ext,
+                        'size_kb': round(file_size / 1024, 2),
+                        'detected_content': []
+                    }
+                    
+                    # Analyze file content
+                    try:
+                        import base64
+                        
+                        # For code files, extract key content
+                        if file_ext in ['.py', '.js', '.jsx', '.html', '.css', '.java', '.cpp', '.ts', '.tsx']:
+                            try:
+                                content = file_data.decode('utf-8', errors='ignore')
+                                
+                                # Detect imports/libraries
+                                if file_ext == '.py':
+                                    import re
+                                    imports = re.findall(r'(?:from|import)\s+([\w.]+)', content)
+                                    file_info['detected_content'].extend(['Python'] + list(set(imports))[:5])
+                                elif file_ext in ['.js', '.jsx', '.ts', '.tsx']:
+                                    import re
+                                    imports = re.findall(r'(?:import|from)\s+[\'"]([^\'"]+)[\'"]', content)
+                                    file_info['detected_content'].extend(['JavaScript/React'] + list(set(imports))[:5])
+                                
+                                # Detect key functions/classes
+                                if 'class ' in content:
+                                    file_info['detected_content'].append('OOP/Classes')
+                                if 'def ' in content or 'function ' in content:
+                                    file_info['detected_content'].append('Functions')
+                                    
+                            except:
+                                file_info['detected_content'].append('Code file')
+                        
+                        # For Excel files
+                        elif file_ext in ['.xlsx', '.xls', '.csv']:
+                            try:
+                                import pandas as pd
+                                from io import BytesIO
+                                
+                                if file_ext == '.csv':
+                                    df = pd.read_csv(BytesIO(file_data))
+                                else:
+                                    df = pd.read_excel(BytesIO(file_data), sheet_name=0)
+                                
+                                file_info['detected_content'].append(f'Excel/CSV with {len(df)} rows')
+                                file_info['detected_content'].append(f'{len(df.columns)} columns')
+                                
+                                # Detect data types
+                                if df.select_dtypes(include=['number']).shape[1] > 0:
+                                    file_info['detected_content'].append('Numerical data')
+                                if df.select_dtypes(include=['object']).shape[1] > 0:
+                                    file_info['detected_content'].append('Text data')
+                            except:
+                                file_info['detected_content'].append('Data file')
+                        
+                        # For images
+                        elif file_ext in ['.png', '.jpg', '.jpeg', '.gif']:
+                            file_info['detected_content'].append('Screenshot/Image')
+                        
+                        # For other files
+                        elif file_ext in ['.pdf', '.docx', '.txt', '.md']:
+                            file_info['detected_content'].append('Documentation')
+                        
+                        elif file_ext in ['.pbix']:
+                            file_info['detected_content'].append('Power BI Dashboard')
+                        
+                        elif file_ext in ['.ipynb']:
+                            file_info['detected_content'].append('Jupyter Notebook')
+                        
+                        elif file_ext in ['.zip']:
+                            file_info['detected_content'].append('Project Archive')
+                    
+                    except Exception as e:
+                        print(f"   Could not analyze file: {str(e)}")
+                    
+                    files_analysis.append(file_info)
+                    uploaded_files_info.append(filename)
+        
+        # Get user's learned skills and expected project (if mobile provided)
+        learned_skills = []
+        expected_project = ''
+        current_month = 1
+        
+        if mobile:
+            try:
+                db = get_db()
+                roadmap_collection = db['Roadmap_Dashboard ']
+                
+                clean_mobile = ''.join(filter(str.isdigit, mobile))
+                mobile_formats = [mobile, clean_mobile, clean_mobile[-10:]]
+                
+                roadmap = roadmap_collection.find_one({'_id': {'$in': mobile_formats}})
+                
+                if roadmap:
+                    resume_collection = db['Resume']
+                    user_resume = resume_collection.find_one({'_id': {'$in': mobile_formats}})
+                    current_month = user_resume.get('currentMonth', 1) if user_resume else 1
+                    
+                    roadmap_data = roadmap.get('roadmap', roadmap)
+                    month_key = f"Month {current_month}"
+                    
+                    if month_key in roadmap_data:
+                        month_data = roadmap_data[month_key]
+                        skill_focus = month_data.get('Skill Focus', '')
+                        if skill_focus:
+                            learned_skills = [s.strip() for s in skill_focus.split(',')]
+                        
+                        # Get expected project (problem statement)
+                        expected_project = month_data.get('Mini Project', '')
+                        if expected_project:
+                            print(f"🚀 Expected Project: {expected_project}")
+            except Exception as e:
+                print(f"Could not fetch learned skills: {str(e)}")
+        
+        # Generate description using AI (OpenAI or fallback)
+        openai_api_key = os.getenv('OPENAI_API_KEY', '')
+        
+        if openai_api_key:
+            try:
+                import requests
+                
+                # Build file summary
+                file_summary = ""
+                if files_analysis:
+                    file_summary = "\n\nUploaded Files Analysis:"
+                    for f in files_analysis:
+                        file_summary += f"\n- {f['filename']} ({f['size_kb']}KB): {', '.join(f['detected_content'])}"
+                else:
+                    file_summary = "\n\nNo files uploaded yet."
+                
+                # Build learned skills context
+                skills_context = ""
+                if learned_skills:
+                    skills_context = f"\n\nStudent has learned these skills in Month {current_month}: {', '.join(learned_skills[:10])}"
+                
+                # Build expected project context (problem statement)
+                project_context = ""
+                if expected_project:
+                    project_context = f"\n\nExpected Project (Problem Statement): \"{expected_project}\"\nThe description should align with this problem statement and demonstrate how the project fulfills these requirements."
+                
+                prompt = f"""You are helping a student write a project description for their portfolio submission.
+
+Project Title: "{project_title}"
+{file_summary}
+{skills_context}
+{project_context}
+
+IMPORTANT RULES:
+- DO NOT copy or repeat the problem statement word-for-word
+- DO NOT use generic phrases like "This project addresses the requirement"
+- MUST be specific about ACTUAL work done and results achieved
+- Focus on implementation details, not just requirements
+- MUST be 100-150 words minimum (6-8 detailed sentences)
+
+Generate a detailed, professional project description (100-150 words, 6-8 sentences) that:
+1. States WHAT you built and WHY with context (in your own words, don't copy problem statement)
+2. Explains SPECIFIC actions taken step-by-step:
+   - For data analysis: exact cleaning operations, transformations applied
+   - For web apps: architecture, components, database design
+   - For ML: data preprocessing, model selection, training process
+3. Describes KEY features/functionality with technical implementation details
+4. Mentions ACTUAL results/insights/outputs with specific numbers or findings
+5. Lists technologies/tools used and HOW they were used (from detected files)
+6. Naturally weaves in 2-3 learned skills showing HOW you applied them
+7. Includes metrics: data size, performance improvements, accuracy, etc.
+8. Describes the outcome and practical value of the project
+
+For DATA ANALYSIS projects specifically mention:
+- Exact data volume (rows/columns) and data types handled
+- What cleaning/preprocessing steps performed with specifics (e.g., "removed 247 duplicates", "standardized 3 inconsistent categories")
+- What analysis techniques used (aggregations, pivot tables, statistical methods, visualizations)
+- What insights or patterns discovered from the data with actual numbers/percentages
+- What reports/charts created (types, what they show, business value)
+- How Excel/tools were used (formulas, functions, features)
+
+For WEB/APP projects specifically mention:
+- Technology stack and architecture (frontend, backend, database)
+- Key features implemented with technical details
+- User interface components and interactions
+- Database schema or data handling approach
+- API endpoints or integration points
+
+For ML/AI projects specifically mention:
+- Dataset size and preprocessing steps
+- Algorithms/models used and why
+- Training process and evaluation metrics
+- Performance achieved (accuracy, precision, etc.)
+- Real-world application of the model
+
+Write in first person ("I built...", "I implemented...", "I analyzed...", "I discovered...").
+Be conversational yet professional. Include specific numbers, metrics, and technical terms.
+
+Good example (Data Analysis - 127 words):
+"I developed a comprehensive sales analytics system analyzing 8,399 transaction records across 18 data fields including region, product category, sales amount, and customer demographics. Performed extensive data cleaning by identifying and removing 247 duplicate entries, standardizing inconsistent region naming conventions across 5 variations, and correcting data type mismatches in date and currency fields. Built dynamic Pivot Tables to aggregate sales data by region and product category, uncovering key insights: the North region generated 38% of total revenue ($2.4M), Electronics emerged as the top-performing category with 42% market share, and Q4 showed 156% growth over Q1. Created interactive visualizations including column charts for regional performance comparison, pie charts for category distribution analysis, and line graphs tracking monthly trends. Applied advanced Excel techniques including VLOOKUP for data consolidation, conditional formatting for outlier detection, and custom calculated fields for profit margin analysis, delivering actionable business intelligence for strategic decision-making."
+
+Generate the description now (be highly specific about numbers, findings, techniques, and implementation):"""
+
+                headers = {
+                    'Authorization': f'Bearer {openai_api_key}',
+                    'Content-Type': 'application/json'
+                }
+                
+                payload = {
+                    'model': 'gpt-4o-mini',
+                    'messages': [
+                        {'role': 'system', 'content': 'You are a professional technical writer helping students create detailed, specific project descriptions that showcase their technical skills and accomplishments. Write descriptions that are 100-150 words with concrete details, numbers, and technical depth.'},
+                        {'role': 'user', 'content': prompt}
+                    ],
+                    'max_tokens': 500,
+                    'temperature': 0.7
+                }
+                
+                response = requests.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    headers=headers,
+                    json=payload,
+                    timeout=15
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    generated_description = result['choices'][0]['message']['content'].strip()
+                    
+                    # Remove quotes if AI wrapped it
+                    generated_description = generated_description.strip('"\'')
+                    
+                    print(f"✅ AI Generated Description: {generated_description[:100]}...")
+                    
+                    return jsonify({
+                        'success': True,
+                        'data': {
+                            'description': generated_description,
+                            'filesAnalyzed': len(files_analysis),
+                            'detectedTechnologies': sum([f['detected_content'] for f in files_analysis], []),
+                            'generatedBy': 'AI'
+                        }
+                    })
+                else:
+                    print(f"OpenAI API error: {response.status_code}")
+                    raise Exception("API error")
+                    
+            except Exception as e:
+                print(f"AI generation failed: {str(e)}")
+                # Fall through to fallback
+        
+        # Fallback: Generate intelligent description without AI
+        # Parse file metadata intelligently
+        dataset_info = {'rows': None, 'cols': None, 'has_excel': False, 'has_python': False, 'has_screenshots': False}
+        
+        for f in files_analysis:
+            content = f.get('detected_content', [])
+            for item in content:
+                if 'Excel/CSV' in str(item) or 'Data file' in str(item):
+                    dataset_info['has_excel'] = True
+                if 'rows' in str(item).lower():
+                    import re
+                    match = re.search(r'(\d+)\s*rows?', str(item), re.IGNORECASE)
+                    if match:
+                        dataset_info['rows'] = int(match.group(1))
+                if 'columns' in str(item).lower():
+                    import re
+                    match = re.search(r'(\d+)\s*columns?', str(item), re.IGNORECASE)
+                    if match:
+                        dataset_info['cols'] = int(match.group(1))
+                if 'Python' in str(item):
+                    dataset_info['has_python'] = True
+                if 'Screenshot' in str(item) or 'Image' in str(item):
+                    dataset_info['has_screenshots'] = True
+        
+        # Determine project type
+        project_type = 'general'
+        if expected_project:
+            project_lower = expected_project.lower()
+            if any(word in project_lower for word in ['data', 'clean', 'analyze', 'analysis', 'excel', 'pivot']):
+                project_type = 'data_analysis'
+            elif any(word in project_lower for word in ['predict', 'model', 'machine learning', 'ml']):
+                project_type = 'ml_model'
+            elif any(word in project_lower for word in ['web', 'website', 'app', 'application']):
+                project_type = 'web_app'
+            elif any(word in project_lower for word in ['dashboard', 'visualization', 'power bi']):
+                project_type = 'dashboard'
+        
+        # Build contextual description based on project type
+        skills_str = ', '.join(learned_skills[:3]) if learned_skills else 'advanced techniques'
+        
+        if project_type == 'data_analysis':
+            fallback_description = f"I developed a comprehensive {project_title} system"
+            
+            if dataset_info['rows'] and dataset_info['cols']:
+                fallback_description += f" to analyze {dataset_info['rows']:,} transaction records across {dataset_info['cols']} data fields including key business metrics and categorical variables. "
+            elif dataset_info['rows']:
+                fallback_description += f" to process and analyze {dataset_info['rows']:,} rows of structured data. "
+            else:
+                fallback_description += " for comprehensive data processing and analytical insights. "
+            
+            fallback_description += "Performed extensive data cleaning operations including identifying and removing duplicate entries, standardizing inconsistent categorical values and naming conventions, handling missing data through appropriate imputation methods, and correcting data type mismatches. "
+            
+            if 'excel' in skills_str.lower() or 'excel' in project_title.lower():
+                fallback_description += "Built dynamic Pivot Tables to aggregate and cross-tabulate data across multiple dimensions, enabling detailed pattern analysis by various categories and time periods. "
+                fallback_description += "Created interactive visualizations including column charts for comparative analysis, pie charts for distribution breakdowns, line graphs for trend identification, and conditional formatting to highlight key data points and outliers. "
+                fallback_description += "Utilized advanced Excel functions such as VLOOKUP for data consolidation, IF statements for conditional logic, and calculated fields for derived metrics. "
+            else:
+                fallback_description += "Implemented sophisticated data transformation and aggregation techniques to extract meaningful patterns and statistical insights from the dataset. "
+                fallback_description += "Generated comprehensive analytical reports with visualizations to communicate findings effectively. "
+            
+            fallback_description += f"Applied {skills_str} principles throughout the project to deliver actionable, data-driven insights that support strategic decision-making and business intelligence objectives."
+            
+        elif project_type == 'ml_model':
+            fallback_description = f"I built a comprehensive {project_title} machine learning solution"
+            if dataset_info['rows']:
+                fallback_description += f" utilizing a dataset of {dataset_info['rows']:,} samples for model training and validation. "
+            else:
+                fallback_description += " with full end-to-end implementation. "
+            fallback_description += "Conducted thorough data preprocessing including handling missing values, encoding categorical variables, normalizing numerical features, and splitting data into training and testing sets. "
+            fallback_description += "Engineered relevant features to improve model performance, selected appropriate machine learning algorithms based on problem requirements, and trained the model using cross-validation techniques. "
+            fallback_description += "Evaluated model performance using multiple metrics including accuracy, precision, recall, and F1-score, then optimized hyperparameters to achieve better results. "
+            if dataset_info['has_python']:
+                fallback_description += "Implemented the solution using Python with libraries such as scikit-learn, pandas, and numpy for efficient data manipulation and model development. "
+            fallback_description += f"Applied {skills_str} throughout the machine learning pipeline to deliver a robust predictive model with practical real-world applications."
+            
+        elif project_type == 'web_app':
+            fallback_description = f"I developed a full-stack {project_title} web application with comprehensive functionality and user-friendly interface. "
+            fallback_description += "Designed and implemented responsive user interface components with intuitive navigation, interactive elements, and modern styling for optimal user experience across different devices. "
+            fallback_description += "Built robust backend architecture with RESTful API endpoints for data operations, business logic processing, and integration with external services. "
+            if dataset_info['has_python']:
+                fallback_description += "Utilized Python with Flask/Django framework for server-side development, implemented database models and ORM for efficient data persistence, and integrated authentication and authorization mechanisms for secure access control. "
+            else:
+                fallback_description += "Implemented data handling features including CRUD operations, form validation, and session management. "
+            fallback_description += "Developed complete data flow from frontend user interactions through backend processing to database storage and retrieval. "
+            fallback_description += f"Applied {skills_str} to create a scalable, maintainable web solution that follows industry best practices and design patterns."
+            
+        elif project_type == 'dashboard':
+            fallback_description = f"I created an interactive {project_title} analytical dashboard for comprehensive data visualization and business intelligence. "
+            if dataset_info['rows']:
+                fallback_description += f"Connected to a live data source containing {dataset_info['rows']:,} records and built multiple coordinated visualization panels for multi-dimensional analysis. "
+            else:
+                fallback_description += "Designed multiple interactive visualization panels with dynamic filtering and drill-down capabilities. "
+            fallback_description += "Developed various chart types including bar charts for comparisons, line graphs for trend analysis, pie charts for composition breakdowns, heat maps for pattern recognition, and gauge charts for KPI monitoring. "
+            fallback_description += "Implemented interactive features such as slicers for dynamic filtering, tooltips for detailed information on hover, cross-filtering between visualizations, and drill-through actions for deeper analysis. "
+            fallback_description += "Created calculated measures and custom fields to derive meaningful business metrics from raw data. "
+            fallback_description += f"Applied {skills_str} to deliver an insightful, user-friendly analytical tool that enables data-driven decision-making and strategic planning."
+            
+        else:
+            # Generic fallback with more detail
+            fallback_description = f"I built a comprehensive {project_title} project to address real-world requirements and demonstrate practical technical skills. "
+            if dataset_info['rows'] and dataset_info['cols']:
+                fallback_description += f"Worked extensively with a dataset containing {dataset_info['rows']:,} rows and {dataset_info['cols']} columns, implementing efficient data structures and algorithms for processing. "
+            fallback_description += "Developed core functionality including data input/output operations, business logic implementation, and user interaction components. "
+            fallback_description += "Implemented proper error handling, data validation, and user feedback mechanisms to ensure robust and reliable operation. "
+            if dataset_info['has_python']:
+                fallback_description += "Utilized Python programming with object-oriented design principles, modular code organization, and industry-standard libraries. "
+            fallback_description += f"Applied {skills_str} throughout the development process to create a functional, well-structured solution that demonstrates proficiency in software development practices and technical problem-solving."
+        
+        # Collect technologies for response
+        technologies = []
+        for f in files_analysis:
+            technologies.extend(f.get('detected_content', []))
+        technologies = list(set(technologies))[:8]
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'description': fallback_description,
+                'filesAnalyzed': len(files_analysis),
+                'detectedTechnologies': technologies,
+                'generatedBy': 'Fallback'
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'message': f'Error generating description: {str(e)}'
+        }), 500
+
+
 @app.route('/api/submit-project', methods=['POST'])
 def submit_project():
     """
@@ -13903,6 +14328,8 @@ def submit_project():
         mobile = request.form.get('mobile')
         project_title = request.form.get('title', '')
         project_description = request.form.get('description', '')
+        submission_type = request.form.get('submissionType', 'file')  # 'file' or 'repo'
+        repo_link = request.form.get('repoLink', '')
         
         if not project_title or not project_description:
             return jsonify({
@@ -13910,13 +14337,20 @@ def submit_project():
                 'message': 'Project title and description are required'
             }), 400
         
+        # Validate based on submission type
+        if submission_type == 'repo' and not repo_link:
+            return jsonify({
+                'success': False,
+                'message': 'Repository link is required when using repository submission'
+            }), 400
+        
         # Handle multiple file uploads and store complete file data
         uploaded_files = []
         files_info = []
         files_content = []
         
-        # Check for multiple files in request
-        if request.files:
+        # Check for multiple files in request (only if submission type is file)
+        if submission_type == 'file' and request.files:
             file_list = request.files.getlist('files[]')  # Multiple files
             if not file_list:
                 # Fallback to single file upload
@@ -13956,15 +14390,163 @@ def submit_project():
                     print(f"File {len(uploaded_files)} stored: {file_info['filename']} ({file_size} bytes)")
                     project_file.seek(0)  # Reset file pointer
         
+        # Handle repository cloning (if submission type is repo)
+        repo_clone_path = None
+        if submission_type == 'repo' and repo_link:
+            from pathlib import Path
+            
+            try:
+                # Create a unique temporary directory for cloning
+                repo_clone_path = tempfile.mkdtemp(prefix='project_repo_')
+                print(f"\n🔄 Cloning repository from: {repo_link}")
+                print(f"   Clone location: {repo_clone_path}")
+                
+                # Clone the repository with depth=1 for speed (shallow clone)
+                clone_process = subprocess.run(
+                    ['git', 'clone', '--depth', '1', repo_link, repo_clone_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=120  # 2 minute timeout
+                )
+                
+                if clone_process.returncode != 0:
+                    if repo_clone_path and os.path.exists(repo_clone_path):
+                        shutil.rmtree(repo_clone_path)
+                    return jsonify({
+                        'success': False,
+                        'message': f'Failed to clone repository. Please check if the repository is public and the URL is correct. Error: {clone_process.stderr}'
+                    }), 400
+                
+                print(f"✅ Repository cloned successfully")
+                
+                # Check repository size (limit to 1 GB)
+                total_size = 0
+                for root, dirs, files in os.walk(repo_clone_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        if os.path.exists(file_path):
+                            total_size += os.path.getsize(file_path)
+                
+                size_mb = total_size / (1024 * 1024)
+                size_gb = size_mb / 1024
+                print(f"📦 Repository size: {size_mb:.2f} MB ({size_gb:.3f} GB)")
+                
+                # Check if size exceeds 1 GB
+                if total_size > 1024 * 1024 * 1024:  # 1 GB in bytes
+                    if repo_clone_path and os.path.exists(repo_clone_path):
+                        shutil.rmtree(repo_clone_path)
+                    return jsonify({
+                        'success': False,
+                        'message': f'Repository size ({size_gb:.2f} GB) exceeds the maximum allowed size of 1 GB. Please use a smaller repository or upload specific files.'
+                    }), 400
+                
+                # Extract files from cloned repository (exclude .git directory)
+                excluded_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'env', 
+                               '.idea', '.vscode', 'dist', 'build', 'target', '.next', 'out'}
+                valid_extensions = {'.py', '.js', '.jsx', '.ts', '.tsx', '.java', '.cpp', '.c', 
+                                  '.cs', '.go', '.rb', '.php', '.html', '.css', '.sql', '.sh',
+                                  '.json', '.xml', '.yaml', '.yml', '.md', '.txt', '.csv', 
+                                  '.xlsx', '.ipynb', '.r', '.scala', '.kt', '.swift', '.m',
+                                  '.h', '.hpp', '.vue', '.svelte', '.rs', '.dart', '.lua'}
+                special_files = {'README', 'LICENSE', 'Dockerfile', 'Makefile', '.gitignore', 
+                               '.dockerignore', 'requirements.txt', 'package.json', 'pom.xml',
+                               'build.gradle', 'Cargo.toml', 'go.mod', 'setup.py', 'CMakeLists.txt'}
+                
+                file_count = 0
+                max_files = 100  # Limit to 100 files for analysis
+                
+                for root, dirs, files in os.walk(repo_clone_path):
+                    # Skip excluded directories
+                    dirs[:] = [d for d in dirs if d not in excluded_dirs]
+                    
+                    for file in files:
+                        if file_count >= max_files:
+                            print(f"⚠️ Reached maximum file limit ({max_files} files)")
+                            break
+                        
+                        file_path = os.path.join(root, file)
+                        relative_path = os.path.relpath(file_path, repo_clone_path)
+                        file_ext = os.path.splitext(file)[1].lower()
+                        
+                        # Check if file should be included
+                        should_include = (
+                            file_ext in valid_extensions or 
+                            file in special_files or
+                            file.upper() in special_files
+                        )
+                        
+                        if should_include:
+                            try:
+                                # Read file content
+                                with open(file_path, 'rb') as f:
+                                    file_data = f.read()
+                                    file_size = len(file_data)
+                                    
+                                    # Skip very large files (> 5 MB)
+                                    if file_size > 5 * 1024 * 1024:
+                                        print(f"⚠️ Skipping large file: {relative_path} ({file_size / (1024*1024):.2f} MB)")
+                                        continue
+                                    
+                                    # Store file information
+                                    file_info = {
+                                        'filename': relative_path.replace('\\', '/'),  # Use forward slashes
+                                        'size': file_size,
+                                        'type': 'text/plain',  # Default type for repo files
+                                        'extension': file_ext[1:] if file_ext else ''
+                                    }
+                                    
+                                    # Convert file to base64 for storage
+                                    import base64
+                                    file_content = base64.b64encode(file_data).decode('utf-8')
+                                    
+                                    uploaded_files.append(relative_path.replace('\\', '/'))
+                                    files_info.append(file_info)
+                                    files_content.append(file_content)
+                                    file_count += 1
+                                    
+                            except Exception as file_error:
+                                print(f"⚠️ Error reading file {relative_path}: {str(file_error)}")
+                                continue
+                    
+                    if file_count >= max_files:
+                        break
+                
+                print(f"✅ Extracted {len(uploaded_files)} files from repository")
+                for idx, filename in enumerate(uploaded_files[:10]):  # Show first 10
+                    print(f"  {idx+1}. {filename} ({files_info[idx]['size']} bytes)")
+                if len(uploaded_files) > 10:
+                    print(f"  ... and {len(uploaded_files) - 10} more files")
+                
+            except subprocess.TimeoutExpired:
+                if repo_clone_path and os.path.exists(repo_clone_path):
+                    shutil.rmtree(repo_clone_path)
+                return jsonify({
+                    'success': False,
+                    'message': 'Repository cloning timed out. The repository might be too large or the connection is slow.'
+                }), 400
+            except Exception as clone_error:
+                print(f"❌ Error cloning repository: {str(clone_error)}")
+                if repo_clone_path and os.path.exists(repo_clone_path):
+                    shutil.rmtree(repo_clone_path)
+                return jsonify({
+                    'success': False,
+                    'message': f'Failed to clone repository: {str(clone_error)}'
+                }), 400
+        
         print(f"\n=== Project Submission Received ===")
         print(f"Mobile: {mobile}")
         print(f"Title: {project_title}")
-        print(f"Files: {len(uploaded_files)} file(s) uploaded")
-        if uploaded_files:
-            for idx, filename in enumerate(uploaded_files):
-                print(f"  {idx+1}. {filename} ({files_info[idx]['size']} bytes)")
+        print(f"Submission Type: {submission_type}")
+        if submission_type == 'file':
+            print(f"Files: {len(uploaded_files)} file(s) uploaded")
+            if uploaded_files:
+                for idx, filename in enumerate(uploaded_files):
+                    print(f"  {idx+1}. {filename} ({files_info[idx]['size']} bytes)")
+            else:
+                print(f"Files: None")
         else:
-            print(f"Files: None")
+            print(f"Repository Link: {repo_link}")
+            print(f"Files extracted from repo: {len(uploaded_files)}")
         
         # Get current month project details from database
         db = get_db()
@@ -14133,7 +14715,54 @@ def submit_project():
         total_quality_indicators = []
         total_detected_issues = []
         
-        for idx, (file_info, file_content) in enumerate(zip(files_info, files_content)):
+        # PRIORITIZE ACTUAL CODE FILES OVER DOCUMENTATION
+        # Sort files so that source code (.py, .js, .html, etc.) comes before README/docs
+        def get_file_priority(file_tuple):
+            """Return priority for file sorting (lower = higher priority)"""
+            file_info, _ = file_tuple
+            filename_lower = file_info['filename'].lower()
+            extension = file_info.get('extension', '').lower()
+            
+            # Priority 1: Core source code files
+            code_exts = ['py', 'js', 'jsx', 'ts', 'tsx', 'java', 'cpp', 'c', 'cs', 'html', 'css']
+            if extension in code_exts:
+                return 1
+            
+            # Priority 2: Config, other code files
+            config_exts = ['json', 'xml', 'yaml', 'yml', 'sql', 'sh']
+            if extension in config_exts:
+                return 2
+                
+            # Priority 3: Data/project files
+            data_exts = ['xlsx', 'csv', 'ipynb', 'pbix']
+            if extension in data_exts:
+                return 3
+            
+            # Priority 4: Media files
+            media_exts = ['png', 'jpg', 'jpeg', 'gif']
+            if extension in media_exts:
+                return 4
+            
+            # Priority 5: Documentation (README, .md, .txt) - LOWEST PRIORITY
+            if 'readme' in filename_lower or extension in ['md', 'txt', 'rst']:
+                return 5
+            
+            return 3  # Default middle priority
+        
+        # Sort files by priority (actual code first, README last)
+        files_with_content = list(zip(files_info, files_content))
+        files_with_content.sort(key=get_file_priority)
+        files_info_sorted = [f[0] for f in files_with_content]
+        files_content_sorted = [f[1] for f in files_with_content]
+        
+        print(f"\n📋 File Processing Order (prioritizing code over docs):")
+        for idx, file_info in enumerate(files_info_sorted[:10]):
+            priority = get_file_priority((file_info, None))
+            print(f"  {idx+1}. {file_info['filename']} (priority: {priority})")
+        if len(files_info_sorted) > 10:
+            print(f"  ... and {len(files_info_sorted) - 10} more files")
+        
+        for idx, (file_info, file_content) in enumerate(zip(files_info_sorted, files_content_sorted)):
             file_analysis = {
                 'file_number': idx + 1,
                 'filename': file_info['filename'],
@@ -14288,6 +14917,195 @@ def submit_project():
                     else:
                         file_analysis['detected_issues'].append(f'No Month {current_month} skills evident in code')
                     
+                    # Check if code relates to expected project
+                    if expected_project:
+                        # Extract keywords from expected project
+                        expected_keywords = [w.strip().lower() for w in expected_project.lower().split() 
+                                           if len(w.strip()) > 3 and w.strip() not in ['with', 'using', 'create', 'build', 'make', 'develop']]
+                        
+                        # Check for project-related keywords in code
+                        project_matches = [kw for kw in expected_keywords if kw in content_lower]
+                        
+                        if len(project_matches) >= 2:
+                            file_analysis['code_quality_indicators'].append(f'Code addresses expected project: {", ".join(project_matches[:3])}')
+                        elif len(project_matches) == 1:
+                            file_analysis['code_quality_indicators'].append(f'Partially relates to expected project: {project_matches[0]}')
+                        else:
+                            file_analysis['detected_issues'].append(f'Code does not clearly relate to expected project: {expected_project[:50]}')
+                    
+                    # === CODE EFFICIENCY ANALYSIS ===
+                    # Check for efficient vs inefficient coding patterns
+                    if file_ext in ['.py', '.js', '.jsx', '.ts', '.tsx', '.java', '.cpp']:
+                        efficiency_score = 0
+                        efficiency_issues = []
+                        efficiency_strengths = []
+                        
+                        # Python-specific efficiency checks
+                        if file_ext == '.py':
+                            # EFFICIENT PATTERNS (positive indicators)
+                            # List comprehensions
+                            if '[' in decoded_content and 'for ' in decoded_content and ' in ' in decoded_content:
+                                if decoded_content.count('[') > 0 and '[' in decoded_content[:decoded_content.find('for ')]:
+                                    efficiency_strengths.append('Uses list comprehensions (efficient iteration)')
+                                    efficiency_score += 2
+                            
+                            # Pandas/NumPy vectorization
+                            if any(lib in content_lower for lib in ['pandas', 'numpy', 'np.', 'df.', 'dataframe']):
+                                if any(op in content_lower for op in ['apply', 'map', 'vectorized', 'broadcast']):
+                                    efficiency_strengths.append('Uses pandas/numpy vectorization (avoids loops)')
+                                    efficiency_score += 3
+                            
+                            # Built-in functions (sum, max, min, etc.)
+                            efficient_builtins = ['sum(', 'max(', 'min(', 'all(', 'any(', 'zip(', 'enumerate(']
+                            builtin_count = sum(1 for b in efficient_builtins if b in decoded_content)
+                            if builtin_count >= 2:
+                                efficiency_strengths.append('Uses built-in functions (optimized C implementations)')
+                                efficiency_score += 2
+                            
+                            # Generators/iterators
+                            if 'yield' in decoded_content or 'generator' in content_lower:
+                                efficiency_strengths.append('Uses generators (memory-efficient iteration)')
+                                efficiency_score += 2
+                            
+                            # Dictionary lookups vs linear search
+                            if 'dict' in content_lower or '{' in decoded_content and ':' in decoded_content:
+                                if 'in ' in decoded_content and ' in ' in decoded_content:
+                                    efficiency_strengths.append('Uses dictionary lookups (O(1) vs O(n) search)')
+                                    efficiency_score += 2
+                            
+                            # Set operations
+                            if 'set(' in decoded_content or any(op in content_lower for op in ['intersection', 'union', 'difference']):
+                                efficiency_strengths.append('Uses set operations (efficient membership testing)')
+                                efficiency_score += 1
+                            
+                            # INEFFICIENT PATTERNS (negative indicators)
+                            # Nested loops (potential O(n^2) or worse)
+                            lines = decoded_content.split('\n')
+                            nested_loop_count = 0
+                            for i, line in enumerate(lines):
+                                if 'for ' in line and ' in ' in line:
+                                    # Check if next few lines have another for loop (nested)
+                                    indent = len(line) - len(line.lstrip())
+                                    for j in range(i+1, min(i+10, len(lines))):
+                                        next_line = lines[j]
+                                        next_indent = len(next_line) - len(next_line.lstrip())
+                                        if next_indent > indent and 'for ' in next_line and ' in ' in next_line:
+                                            nested_loop_count += 1
+                                            break
+                            
+                            if nested_loop_count >= 2:
+                                efficiency_issues.append('Multiple nested loops detected (potential O(n²) complexity)')
+                                efficiency_score -= 2
+                            elif nested_loop_count == 1:
+                                efficiency_issues.append('Nested loop detected (consider optimization if processing large data)')
+                                efficiency_score -= 1
+                            
+                            # String concatenation in loops
+                            if '+=' in decoded_content and 'for ' in decoded_content:
+                                # Check if string concatenation happens in loop
+                                loop_found = False
+                                for line in lines:
+                                    if 'for ' in line and ' in ' in line:
+                                        loop_found = True
+                                    if loop_found and '+=' in line and '"' in line:
+                                        efficiency_issues.append('String concatenation in loop (use join() instead)')
+                                        efficiency_score -= 1
+                                        break
+                            
+                            # Repeated list.append in loop (could use list comprehension)
+                            append_in_loop = False
+                            for i, line in enumerate(lines):
+                                if 'for ' in line and ' in ' in line:
+                                    for j in range(i+1, min(i+15, len(lines))):
+                                        if '.append(' in lines[j]:
+                                            append_in_loop = True
+                                            break
+                                    if append_in_loop:
+                                        break
+                            
+                            if append_in_loop and '[' not in decoded_content[:decoded_content.find('for ')+50]:
+                                efficiency_issues.append('Using append() in loop (consider list comprehension)')
+                                efficiency_score -= 1
+                        
+                        # JavaScript/TypeScript efficiency checks
+                        elif file_ext in ['.js', '.jsx', '.ts', '.tsx']:
+                            # EFFICIENT PATTERNS
+                            # Array methods (map, filter, reduce)
+                            efficient_methods = ['.map(', '.filter(', '.reduce(', '.find(', '.some(', '.every(']
+                            method_count = sum(1 for m in efficient_methods if m in decoded_content)
+                            if method_count >= 2:
+                                efficiency_strengths.append('Uses functional array methods (map/filter/reduce)')
+                                efficiency_score += 2
+                            
+                            # Spread operator / destructuring
+                            if '...' in decoded_content or ('{' in decoded_content and '}' in decoded_content and '=' in decoded_content):
+                                efficiency_strengths.append('Uses modern JS features (spread/destructuring)')
+                                efficiency_score += 1
+                            
+                            # Async/await (non-blocking)
+                            if 'async' in decoded_content and 'await' in decoded_content:
+                                efficiency_strengths.append('Uses async/await (non-blocking operations)')
+                                efficiency_score += 2
+                            
+                            # INEFFICIENT PATTERNS
+                            # Nested loops
+                            nested_loops = decoded_content.count('for') - decoded_content.count('.forEach')
+                            if nested_loops >= 2:
+                                # Check if they're actually nested
+                                if 'for' in decoded_content and decoded_content.count('for') - decoded_content.count('.forEach') >= 2:
+                                    efficiency_issues.append('Nested loops detected (potential O(n²) complexity)')
+                                    efficiency_score -= 2
+                            
+                            # Using for loops instead of array methods
+                            simple_for_loops = decoded_content.count('for (') + decoded_content.count('for(')
+                            if simple_for_loops >= 2 and method_count == 0:
+                                efficiency_issues.append('Using traditional for loops (consider map/filter/reduce)')
+                                efficiency_score -= 1
+                            
+                            # Multiple DOM queries
+                            if decoded_content.count('document.querySelector') >= 3:
+                                efficiency_issues.append('Multiple DOM queries (consider caching selectors)')
+                                efficiency_score -= 1
+                        
+                        # Java/C++ efficiency checks
+                        elif file_ext in ['.java', '.cpp']:
+                            # EFFICIENT PATTERNS
+                            # Using appropriate data structures
+                            if any(ds in decoded_content for ds in ['HashMap', 'HashSet', 'unordered_map', 'unordered_set']):
+                                efficiency_strengths.append('Uses hash-based data structures (O(1) lookups)')
+                                efficiency_score += 2
+                            
+                            # StringBuilder/StringBuffer
+                            if file_ext == '.java' and ('StringBuilder' in decoded_content or 'StringBuffer' in decoded_content):
+                                efficiency_strengths.append('Uses StringBuilder (efficient string operations)')
+                                efficiency_score += 2
+                            
+                            # INEFFICIENT PATTERNS
+                            # String concatenation in loops
+                            if '+' in decoded_content and 'for' in decoded_content and 'String' in decoded_content:
+                                efficiency_issues.append('Possible string concatenation in loop (use StringBuilder)')
+                                efficiency_score -= 2
+                            
+                            # Using ArrayList without initial capacity
+                            if file_ext == '.java' and 'new ArrayList()' in decoded_content:
+                                efficiency_issues.append('ArrayList without initial capacity (causes resizing overhead)')
+                                efficiency_score -= 1
+                        
+                        # Add efficiency indicators to file analysis
+                        if efficiency_strengths:
+                            for strength in efficiency_strengths[:3]:  # Top 3
+                                file_analysis['code_quality_indicators'].append(f'Efficient code: {strength}')
+                        
+                        if efficiency_issues:
+                            for issue in efficiency_issues[:3]:  # Top 3
+                                file_analysis['detected_issues'].append(f'Inefficient pattern: {issue}')
+                        
+                        # Overall efficiency assessment
+                        if efficiency_score >= 4:
+                            file_analysis['code_quality_indicators'].append('Code uses efficient algorithms and patterns')
+                        elif efficiency_score <= -3:
+                            file_analysis['detected_issues'].append('Code has multiple inefficient patterns - needs optimization')
+                    
                     # Check for random/irrelevant content (but exclude special files)
                     code_keywords = ['function', 'def', 'class', 'const', 'var', 'let', 'import', 
                                    'return', 'if', 'for', 'while', 'public', 'private', 'div', 'body', 
@@ -14346,6 +15164,19 @@ def submit_project():
                                 skills_found = [s for s in learned_skills if s.lower() in excel_text]
                                 if skills_found:
                                     file_analysis['code_quality_indicators'].append(f'Excel contains Month skills in columns: {", ".join(skills_found[:3])}')
+                                
+                                # Check if Excel data relates to expected project
+                                if expected_project:
+                                    expected_keywords = [w.strip().lower() for w in expected_project.lower().split() 
+                                                       if len(w.strip()) > 3]
+                                    # Check columns and first few rows
+                                    excel_content = excel_text + ' ' + df.head().to_string().lower()
+                                    project_matches = [kw for kw in expected_keywords if kw in excel_content]
+                                    
+                                    if len(project_matches) >= 2:
+                                        file_analysis['code_quality_indicators'].append(f'Excel data aligns with expected project: {", ".join(project_matches[:2])}')
+                                    else:
+                                        file_analysis['detected_issues'].append(f'Excel data may not relate to expected project: {expected_project[:50]}')
                                     
                             except Exception as e:
                                 extracted_content = f"Excel file uploaded but couldn't parse: {str(e)}"
@@ -14381,6 +15212,17 @@ Sample Code Cells:
                                 skills_found = [s for s in learned_skills if s.lower() in notebook_text]
                                 if skills_found:
                                     file_analysis['code_quality_indicators'].append(f'Notebook uses Month skills: {", ".join(skills_found[:3])}')
+                                
+                                # Check if notebook relates to expected project
+                                if expected_project:
+                                    expected_keywords = [w.strip().lower() for w in expected_project.lower().split() 
+                                                       if len(w.strip()) > 3]
+                                    project_matches = [kw for kw in expected_keywords if kw in notebook_text]
+                                    
+                                    if len(project_matches) >= 2:
+                                        file_analysis['code_quality_indicators'].append(f'Notebook addresses expected project: {", ".join(project_matches[:2])}')
+                                    else:
+                                        file_analysis['detected_issues'].append(f'Notebook may not relate to expected project: {expected_project[:50]}')
                                     
                             except Exception as e:
                                 extracted_content = f"Jupyter notebook uploaded but couldn't parse: {str(e)}"
@@ -14421,6 +15263,17 @@ Sample Code Cells:
                                         skills_found = [s for s in learned_skills if s.lower() in schema_data.lower()]
                                         if skills_found:
                                             file_analysis['code_quality_indicators'].append(f'Power BI uses Month skills: {", ".join(skills_found[:3])}')
+                                        
+                                        # Check if Power BI relates to expected project
+                                        if expected_project:
+                                            expected_keywords = [w.strip().lower() for w in expected_project.lower().split() 
+                                                               if len(w.strip()) > 3]
+                                            project_matches = [kw for kw in expected_keywords if kw in schema_data.lower()]
+                                            
+                                            if len(project_matches) >= 2:
+                                                file_analysis['code_quality_indicators'].append(f'Power BI addresses expected project: {", ".join(project_matches[:2])}')
+                                            else:
+                                                file_analysis['detected_issues'].append(f'Power BI may not relate to expected project: {expected_project[:50]}')
                                     else:
                                         extracted_content = "Power BI file structure detected but couldn't extract model details"
                                         
@@ -14494,17 +15347,19 @@ Sample Code Cells:
 PROJECT DETAILS:
 - Title: "{project_title}"
 - Description: "{project_description[:200]}"
+- Expected Project (Problem Statement): "{expected_project if expected_project else 'Not specified'}"
 - Expected Skills: {', '.join(learned_skills[:5])}
 
 ANALYZE THIS IMAGE AND ANSWER:
 
 🚨 CRITICAL QUESTION: Does this image show the ACTUAL PROJECT described above?
 
-FOR THIS SPECIFIC PROJECT "{project_title}":
+FOR THIS SPECIFIC PROJECT "{project_title}" (Expected: "{expected_project if expected_project else 'Check title'}"):
+- Image MUST directly relate to the expected project: "{expected_project if expected_project else project_title}"
 - If it's a PORTFOLIO/WEBSITE project → Image MUST show HTML/CSS code OR the actual website interface
-- If it's a DATA ANALYSIS project → Image MUST show charts/graphs/Excel/Python analysis OR code
-- If it's a MACHINE LEARNING project → Image MUST show model code, Jupyter notebook, or prediction results
-- If it's a DASHBOARD project → Image MUST show the actual dashboard interface OR Power BI/Tableau
+- If it's a DATA ANALYSIS project → Image MUST show charts/graphs/Excel/Python analysis OR code that matches the expected project
+- If it's a MACHINE LEARNING project → Image MUST show model code, Jupyter notebook, or prediction results for the specific problem
+- If it's a DASHBOARD project → Image MUST show the actual dashboard interface OR Power BI/Tableau related to the expected project topic
 
 MARK AS "NOT TECHNICAL:" IF IMAGE SHOWS:
 ❌ Random person photo (selfie, portrait, people)
@@ -14943,7 +15798,16 @@ NOTE: {file_ext.upper()} archives need to be extracted manually. For automated a
             # Track file types
             if file_analysis['is_code_file']:
                 has_code_file = True
-                if file_analysis.get('code_snippet'):
+                # CRITICAL FIX: Exclude README and documentation files from combined code snippet
+                # Only include actual source code files (not .md, .txt, README files)
+                # This ensures AI analyzes actual code instead of just reading README
+                is_documentation_file = (
+                    file_analysis.get('file_type') == 'documentation' or
+                    'readme' in file_info['filename'].lower() or
+                    file_info['filename'].lower().endswith(('.md', '.txt', '.rst'))
+                )
+                
+                if file_analysis.get('code_snippet') and not is_documentation_file:
                     combined_code_snippet += f"\n\n=== FILE {idx+1}: {file_info['filename']} ===\n{file_analysis['code_snippet'][:10000]}"
             
             if file_analysis.get('file_type') in ['media']:
@@ -15315,6 +16179,14 @@ NOTE: Detail (15) + Alignment (5) + Learned Concepts (10) = 30 marks total
 
 === PART 3: SUBMITTED FILES EVALUATION (65 marks) ===
 
+🚨 CRITICAL INSTRUCTION: PRIORITIZE ACTUAL CODE FILES, NOT README 🚨
+- When analyzing GitHub repos, students often include README files
+- DO NOT base your evaluation primarily on README content
+- README is just documentation - evaluate the ACTUAL CODE FILES (.py, .js, .html, .css, etc.)
+- Look for source code that implements the learned skills, not just descriptions in README
+- README/documentation files should be given minimal weight (max 5 marks)
+- Example: If repo has README.md + app.py → Focus evaluation on app.py code, not README
+
 FIRST: Analyze what files are NEEDED for "{project_title}":
 - Based on project title and description, list what files/artifacts SHOULD exist
 - Consider project type: Is it code? Data analysis? Design? Documentation?
@@ -15385,10 +16257,15 @@ For DESIGN FILES (Figma, PSD, Images):
 - Appropriate resolution/format (up to 5 marks per file)
 
 For DOCUMENTATION FILES (PDF, DOCX, README):
-- **EXPLAINS LEARNED CONCEPTS USED (up to 20 marks per file)** ⭐ MOST IMPORTANT
-- Includes technical details (up to 15 marks per file)
-- Explains project thoroughly (up to 15 marks per file)
-- Proper structure and formatting (up to 5 marks per file)
+⚠️ **README/DOCUMENTATION = MAX 5-10 marks total** ⚠️
+- README is SUPPORTING documentation, not the main project
+- Focus evaluation on actual code/implementation files
+- README should only supplement the evaluation, not drive it
+- If only README is uploaded without code → Major deduction
+- Documentation scoring:
+  * Good README that explains the code: up to 5 marks
+  * Comprehensive technical documentation (API docs, architecture): up to 10 marks
+  * README alone without actual project files: 0 marks for files section
 - Shows understanding of Month {current_month} skills (up to 10 marks per file)
 
 For SCREENSHOTS/IMAGES:
@@ -15757,7 +16634,7 @@ Return ONLY valid JSON with the exact structure shown above."""
             }
             
             payload = {
-                'model': 'sonar',  # Updated to current Perplexity model name
+                'model': 'llama-3.1-sonar-large-128k-chat',  # Valid Perplexity model name
                 'messages': [
                     {'role': 'system', 'content': 'You are a STRICT Senior Technical Manager with HIGH STANDARDS. Be critical and precise. Most projects have flaws - identify them. Do NOT be lenient. Sound professional and direct.'},
                     {'role': 'user', 'content': evaluation_prompt}
@@ -16029,13 +16906,50 @@ Return ONLY valid JSON with the exact structure shown above."""
                 # Check if project title/description matches expected project
                 project_matches_expected = False
                 match_quality = 0
+                title_match_quality = 0
                 if expected_project:
                     expected_keywords = expected_project.lower().split()
                     project_text = (project_title + ' ' + project_description).lower()
-                    matching_keywords = [kw for kw in expected_keywords if kw in project_text and len(kw) > 3]
-                    if expected_keywords:
-                        match_quality = len(matching_keywords) / len(expected_keywords)
-                    project_matches_expected = match_quality >= 0.4  # Require 40% match
+                    project_title_lower = project_title.lower()
+                    
+                    # Filter to meaningful keywords only (length > 3)
+                    meaningful_keywords = [kw for kw in expected_keywords if len(kw) > 3]
+                    
+                    # Smart keyword matching with partial matches and common variations
+                    matching_keywords = []
+                    for kw in meaningful_keywords:
+                        # Exact match
+                        if kw in project_text:
+                            matching_keywords.append(kw)
+                        # Partial/stem match (e.g., "data" matches "database", "dataset")
+                        elif any(kw in word or word in kw for word in project_text.split() if len(word) > 3):
+                            matching_keywords.append(kw)
+                        # Common synonyms
+                        elif kw == 'clean' and any(w in project_text for w in ['clean', 'cleaning', 'preprocess', 'prepare']):
+                            matching_keywords.append(kw)
+                        elif kw == 'analyze' and any(w in project_text for w in ['analyze', 'analysis', 'analytical']):
+                            matching_keywords.append(kw)
+                        elif kw == 'dataset' and any(w in project_text for w in ['data', 'dataset']):
+                            matching_keywords.append(kw)
+                        elif kw == 'report' and any(w in project_text for w in ['report', 'summary', 'dashboard']):
+                            matching_keywords.append(kw)
+                        elif kw == 'pivot' and any(w in project_text for w in ['pivot', 'table', 'aggregat']):
+                            matching_keywords.append(kw)
+                    
+                    # Calculate overall match quality
+                    if meaningful_keywords:
+                        match_quality = len(set(matching_keywords)) / len(meaningful_keywords)
+                    
+                    # Calculate title-specific match quality (more lenient for title alone)
+                    title_matching = []
+                    for kw in meaningful_keywords:
+                        if kw in project_title_lower or any(kw in word or word in kw for word in project_title_lower.split() if len(word) > 3):
+                            title_matching.append(kw)
+                    if meaningful_keywords:
+                        title_match_quality = len(set(title_matching)) / len(meaningful_keywords)
+                    
+                    # Project matches if either overall OR title match is good enough
+                    project_matches_expected = match_quality >= 0.3 or title_match_quality >= 0.15  # Lowered threshold
                 
                 # Check description RELEVANCE (not just length)
                 desc_words = project_description.lower().split()
@@ -16084,219 +16998,225 @@ Return ONLY valid JSON with the exact structure shown above."""
                     base_score += 5   # Some skills present
                 else:
                     base_score -= 5   # Too few skills penalty
-            
-            # Quality indicators
-            if has_testing: base_score += 8
-            if has_error_handling: base_score += 8
-            if has_documentation: base_score += 5
-            if has_security: base_score += 5
-            
-            # Description quality based on RELEVANCE and content (not word count)
-            if is_relevant_description:
-                base_score += 8  # Relevant technical description
-            elif is_generic_description:
-                base_score -= 8  # Generic/filler content penalty
-            
-            # FILE ANALYSIS IMPACT (CRITICAL)
-            # Use all_files_analysis array to check individual files
-            if all_files_analysis and len(all_files_analysis) > 0:
-                # Analyze first file (since most submissions are single file)
-                first_file = all_files_analysis[0]
                 
-                if not first_file.get('has_file'):
-                    base_score = min(base_score, 50)  # No file = max 50
-                    print("FILE PENALTY: No file uploaded - capped at 50/100")
-                elif first_file.get('is_code_file'):
-                    # CODE PROJECT EVALUATION
-                    detected_issues = first_file.get('detected_issues', [])
-                    if 'File too short - likely incomplete' in detected_issues:
-                        base_score = min(base_score, 60)  # < 20 lines = max 60
-                        print("FILE PENALTY: Too short (<20 lines) - capped at 60/100")
-                    if any('placeholder' in issue.lower() or 'dummy' in issue.lower() for issue in detected_issues):
-                        base_score -= 20  # Placeholder content = -20
-                        print("FILE PENALTY: Placeholder/dummy content detected - deducted 20 points")
-                    if any('no month' in issue.lower() and 'skills' in issue.lower() for issue in detected_issues):
-                        base_score = min(base_score, 45)  # No Month skills in code = max 45
-                        print("FILE PENALTY: No Month skills in code - capped at 45/100")
-                    if 'File may not contain actual code' in detected_issues:
-                        base_score = min(base_score, 55)  # Not real code = max 55
-                        print("FILE PENALTY: Not actual code - capped at 55/100")
-                    if 'No comments found' in detected_issues:
-                        base_score -= 5  # No comments = -5
-                        print("FILE PENALTY: No code comments - deducted 5 points")
+                # Quality indicators
+                if has_testing: base_score += 8
+                if has_error_handling: base_score += 8
+                if has_documentation: base_score += 5
+                if has_security: base_score += 5
+                
+                # Description quality based on RELEVANCE and content (not word count)
+                if is_relevant_description:
+                    base_score += 8  # Relevant technical description
+                elif is_generic_description:
+                    base_score -= 8  # Generic/filler content penalty
+                
+                # FILE ANALYSIS IMPACT (CRITICAL)
+                # Use all_files_analysis array to check individual files
+                if all_files_analysis and len(all_files_analysis) > 0:
+                    # Analyze first file (since most submissions are single file)
+                    first_file = all_files_analysis[0]
                     
-                    # Code quality bonuses
-                    quality_indicators = first_file.get('code_quality_indicators', [])
-                    if any('functions' in qi.lower() or 'classes' in qi.lower() for qi in quality_indicators):
-                        base_score += 5
-                        print("FILE BONUS: Functions/classes found - added 5 points")
-                    if any('error handling' in qi.lower() for qi in quality_indicators):
-                        base_score += 5
-                        print("FILE BONUS: Error handling found - added 5 points")
-                    if any('testing' in qi.lower() for qi in quality_indicators):
-                        base_score += 5
-                        print("FILE BONUS: Testing code found - added 5 points")
-                    if any('external libraries' in qi.lower() for qi in quality_indicators):
-                        base_score += 5
-                        print("FILE BONUS: External libraries used - added 5 points")
-                    if any('all' in qi.lower() and 'skills' in qi.lower() for qi in quality_indicators):
-                        base_score += 10
-                        print("FILE BONUS: All learned skills in code - added 10 points")
+                    if not first_file.get('has_file'):
+                        base_score = min(base_score, 50)  # No file = max 50
+                        print("FILE PENALTY: No file uploaded - capped at 50/100")
+                    elif first_file.get('is_code_file'):
+                        # CODE PROJECT EVALUATION
+                        detected_issues = first_file.get('detected_issues', [])
+                        if 'File too short - likely incomplete' in detected_issues:
+                            base_score = min(base_score, 60)  # < 20 lines = max 60
+                            print("FILE PENALTY: Too short (<20 lines) - capped at 60/100")
+                        if any('placeholder' in issue.lower() or 'dummy' in issue.lower() for issue in detected_issues):
+                            base_score -= 20  # Placeholder content = -20
+                            print("FILE PENALTY: Placeholder/dummy content detected - deducted 20 points")
+                        if any('no month' in issue.lower() and 'skills' in issue.lower() for issue in detected_issues):
+                            base_score = min(base_score, 45)  # No Month skills in code = max 45
+                            print("FILE PENALTY: No Month skills in code - capped at 45/100")
+                        if 'File may not contain actual code' in detected_issues:
+                            base_score = min(base_score, 55)  # Not real code = max 55
+                            print("FILE PENALTY: Not actual code - capped at 55/100")
+                        if 'No comments found' in detected_issues:
+                            base_score -= 5  # No comments = -5
+                            print("FILE PENALTY: No code comments - deducted 5 points")
                         
-                elif first_file.get('is_project_file'):
-                    # NON-CODE PROJECT EVALUATION (Power BI, Excel, Design, Archives, etc.)
-                    detected_issues = first_file.get('detected_issues', [])
-                    quality_indicators = first_file.get('code_quality_indicators', [])
-                    file_type = first_file.get('file_type', 'unknown')
-                    
-                    print(f"FILE INFO: Valid {file_type} project file detected")
-                    print(f"FILE INFO: Quality indicators: {quality_indicators}")
-                    print(f"FILE INFO: Issues: {detected_issues}")
-                    
-                    # Check for issues
-                    if any('too small' in issue.lower() for issue in detected_issues):
-                        base_score = min(base_score, 60)
-                        print("FILE PENALTY: File too small - likely incomplete - capped at 60/100")
-                    if any('does not mention' in issue.lower() for issue in detected_issues):
-                        base_score -= 15
-                        print("FILE PENALTY: Description doesn't explain file contents - deducted 15 points")
-                    if any('only' in issue.lower() and 'skills mentioned' in issue.lower() for issue in detected_issues):
-                        base_score -= 10
-                        print("FILE PENALTY: Few Month skills in description - deducted 10 points")
-                    
-                    # Give bonuses for proper file upload
-                    if any('valid' in qi.lower() and 'file uploaded' in qi.lower() for qi in quality_indicators):
-                        base_score += 10
-                        print("FILE BONUS: Appropriate project file format - added 10 points")
-                    if any('mentions' in qi.lower() and 'skills' in qi.lower() for qi in quality_indicators):
-                        base_score += 10
-                        print("FILE BONUS: Month skills mentioned in description - added 10 points")
-                    
-                    # ARCHIVE SPECIFIC BONUSES (ZIP files)
-                    if file_type == 'archive':
-                        if any('contains' in qi.lower() and 'code file' in qi.lower() for qi in quality_indicators):
-                            base_score += 15
-                            print("FILE BONUS: ZIP contains code files - added 15 points")
-                        if any('contains' in qi.lower() and 'screenshot' in qi.lower() for qi in quality_indicators):
+                        # Code quality bonuses
+                        quality_indicators = first_file.get('code_quality_indicators', [])
+                        if any('functions' in qi.lower() or 'classes' in qi.lower() for qi in quality_indicators):
+                            base_score += 5
+                            print("FILE BONUS: Functions/classes found - added 5 points")
+                        if any('error handling' in qi.lower() for qi in quality_indicators):
+                            base_score += 5
+                            print("FILE BONUS: Error handling found - added 5 points")
+                        if any('testing' in qi.lower() for qi in quality_indicators):
+                            base_score += 5
+                            print("FILE BONUS: Testing code found - added 5 points")
+                        if any('external libraries' in qi.lower() for qi in quality_indicators):
+                            base_score += 5
+                            print("FILE BONUS: External libraries used - added 5 points")
+                        if any('all' in qi.lower() and 'skills' in qi.lower() for qi in quality_indicators):
                             base_score += 10
-                            print("FILE BONUS: ZIP contains screenshots - added 10 points")
-                        if any('zip contains month skills' in qi.lower() for qi in quality_indicators):
-                            base_score += 15
-                            print("FILE BONUS: ZIP code uses Month skills - added 15 points")
+                            print("FILE BONUS: All learned skills in code - added 10 points")
+                            
+                    elif first_file.get('is_project_file'):
+                        # NON-CODE PROJECT EVALUATION (Power BI, Excel, Design, Archives, etc.)
+                        detected_issues = first_file.get('detected_issues', [])
+                        quality_indicators = first_file.get('code_quality_indicators', [])
+                        file_type = first_file.get('file_type', 'unknown')
                         
+                        print(f"FILE INFO: Valid {file_type} project file detected")
+                        print(f"FILE INFO: Quality indicators: {quality_indicators}")
+                        print(f"FILE INFO: Issues: {detected_issues}")
+                        
+                        # Check for issues
+                        if any('too small' in issue.lower() for issue in detected_issues):
+                            base_score = min(base_score, 60)
+                            print("FILE PENALTY: File too small - likely incomplete - capped at 60/100")
+                        if any('does not mention' in issue.lower() for issue in detected_issues):
+                            base_score -= 15
+                            print("FILE PENALTY: Description doesn't explain file contents - deducted 15 points")
+                        if any('only' in issue.lower() and 'skills mentioned' in issue.lower() for issue in detected_issues):
+                            base_score -= 10
+                            print("FILE PENALTY: Few Month skills in description - deducted 10 points")
+                        
+                        # Give bonuses for proper file upload
+                        if any('valid' in qi.lower() and 'file uploaded' in qi.lower() for qi in quality_indicators):
+                            base_score += 10
+                            print("FILE BONUS: Appropriate project file format - added 10 points")
+                        if any('mentions' in qi.lower() and 'skills' in qi.lower() for qi in quality_indicators):
+                            base_score += 10
+                            print("FILE BONUS: Month skills mentioned in description - added 10 points")
+                        
+                        # ARCHIVE SPECIFIC BONUSES (ZIP files)
+                        if file_type == 'archive':
+                            if any('contains' in qi.lower() and 'code file' in qi.lower() for qi in quality_indicators):
+                                base_score += 15
+                                print("FILE BONUS: ZIP contains code files - added 15 points")
+                            if any('contains' in qi.lower() and 'screenshot' in qi.lower() for qi in quality_indicators):
+                                base_score += 10
+                                print("FILE BONUS: ZIP contains screenshots - added 10 points")
+                            if any('zip contains month skills' in qi.lower() for qi in quality_indicators):
+                                base_score += 15
+                                print("FILE BONUS: ZIP code uses Month skills - added 15 points")
+                            
+                    else:
+                        # Unrecognized file type
+                        print(f"FILE WARNING: File type not recognized - is_code={first_file.get('is_code_file')}, is_project={first_file.get('is_project_file')}")
+                        base_score = min(base_score, 40)
+                        print("FILE PENALTY: Unrecognized file format - capped at 40/100")
                 else:
-                    # Unrecognized file type
-                    print(f"FILE WARNING: File type not recognized - is_code={first_file.get('is_code_file')}, is_project={first_file.get('is_project_file')}")
-                    base_score = min(base_score, 40)
-                    print("FILE PENALTY: Unrecognized file format - capped at 40/100")
-            else:
-                # No files uploaded
-                base_score = min(base_score, 50)
-                print("FILE PENALTY: No files analyzed - capped at 50/100")
-            
-            # NEW SCORING SYSTEM: Title (5) + Description (30) + Files (65) = 100
-            
-            # === PART 1: TITLE MATCH (5 marks) ===
-            title_score = 0
-            title_reason = ""
-            
-            if project_matches_expected and match_quality >= 0.9:
-                title_score = 5
-                title_reason = f"Title perfectly matches expected Month {current_month} project"
-            elif project_matches_expected and match_quality >= 0.7:
-                title_score = 4
-                title_reason = f"Title closely matches expected project with minor variations"
-            elif project_matches_expected and match_quality >= 0.5:
-                title_score = 3
-                title_reason = f"Title partially matches expected project"
-            elif project_matches_expected and match_quality >= 0.3:
-                title_score = 1
-                title_reason = f"Title has some relation to expected project"
-            else:
+                    # No files uploaded
+                    base_score = min(base_score, 50)
+                    print("FILE PENALTY: No files analyzed - capped at 50/100")
+                
+                # NEW SCORING SYSTEM: Title (5) + Description (30) + Files (65) = 100
+                
+                # === PART 1: TITLE MATCH (5 marks) ===
                 title_score = 0
-                title_reason = f"Title does not match expected project: {expected_project}"
-            
-            # === PART 2: DESCRIPTION EVALUATION (30 marks) ===
-            # A. Detail Level (20 marks)
-            detail_score = 0
-            detail_reason = ""
-            
-            # More reasonable thresholds - reward detailed descriptions
-            if relevant_tech_terms >= 8 and has_implementation_detail and desc_word_count > 80:
-                detail_score = 19
-                detail_reason = "Exceptional detail - specific technologies, implementation approach, technical depth"
-            elif relevant_tech_terms >= 6 and has_implementation_detail and desc_word_count > 60:
-                detail_score = 16
-                detail_reason = "Very detailed - explains what was built and how it works"
-            elif relevant_tech_terms >= 4 and has_implementation_detail and desc_word_count > 40:
-                detail_score = 12
-                detail_reason = "Good detail - describes main features and technologies"
-            elif relevant_tech_terms >= 2 and desc_word_count > 25:
-                detail_score = 8
-                detail_reason = "Basic detail - lists features but could use more depth"
-            elif desc_word_count > 15:
-                detail_score = 4
-                detail_reason = "Minimal detail - very brief and generic"
-            else:
+                title_reason = ""
+                
+                # Use title_match_quality for title scoring (more accurate than overall match_quality)
+                if not expected_project:
+                    title_score = 3  # No expected project defined, give partial credit
+                    title_reason = "No specific project requirement defined for comparison"
+                elif title_match_quality >= 0.3 or match_quality >= 0.6:
+                    title_score = 5
+                    title_reason = f"Title matches expected Month {current_month} project well"
+                elif title_match_quality >= 0.2 or match_quality >= 0.4:
+                    title_score = 4
+                    title_reason = f"Title closely matches expected project with minor variations"
+                elif title_match_quality >= 0.1 or match_quality >= 0.25:
+                    title_score = 3
+                    title_reason = f"Title partially matches expected project"
+                elif title_match_quality >= 0.05 or match_quality >= 0.15:
+                    title_score = 1
+                    title_reason = f"Title has some relation to expected project"
+                else:
+                    title_score = 0
+                    title_reason = f"Title does not match expected project: {expected_project}"
+                
+                print(f"📊 Title Match: title_match_quality={title_match_quality:.2f}, overall_match={match_quality:.2f}, score={title_score}/5")
+                
+                # === PART 2: DESCRIPTION EVALUATION (30 marks) ===
+                # A. Detail Level (20 marks)
                 detail_score = 0
-                detail_reason = "No meaningful description provided"
-            
-            # B. Alignment with Title (10 marks)
-            alignment_score = 0
-            alignment_reason = ""
-            
-            # Check if description explains the project mentioned in title
-            title_keywords = set(project_title.lower().split()) - {'a', 'an', 'the', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'using', 'and'}
-            desc_keywords = set(project_description.lower().split())
-            title_in_desc_ratio = len(title_keywords.intersection(desc_keywords)) / max(len(title_keywords), 1)
-            
-            # More reasonable alignment scoring
-            if title_in_desc_ratio >= 0.7 and not is_generic_description and has_implementation_detail:
-                alignment_score = 9
-                alignment_reason = "Perfect alignment - description thoroughly explains title claims"
-            elif title_in_desc_ratio >= 0.5 and not is_generic_description:
-                alignment_score = 8
-                alignment_reason = "Strong alignment - description relates well to title"
-            elif title_in_desc_ratio >= 0.3:
-                alignment_score = 6
-                alignment_reason = "Good alignment - description covers title aspects"
-            elif title_in_desc_ratio >= 0.15:
-                alignment_score = 4
-                alignment_reason = "Partial alignment - some gaps or inconsistencies"
-            elif title_in_desc_ratio > 0:
-                alignment_score = 2
-                alignment_reason = "Weak alignment - description barely relates to title"
-            else:
+                detail_reason = ""
+                
+                # More reasonable thresholds - reward detailed descriptions
+                if relevant_tech_terms >= 8 and has_implementation_detail and desc_word_count > 80:
+                    detail_score = 19
+                    detail_reason = "Exceptional detail - specific technologies, implementation approach, technical depth"
+                elif relevant_tech_terms >= 6 and has_implementation_detail and desc_word_count > 60:
+                    detail_score = 16
+                    detail_reason = "Very detailed - explains what was built and how it works"
+                elif relevant_tech_terms >= 4 and has_implementation_detail and desc_word_count > 40:
+                    detail_score = 12
+                    detail_reason = "Good detail - describes main features and technologies"
+                elif relevant_tech_terms >= 2 and desc_word_count > 25:
+                    detail_score = 8
+                    detail_reason = "Basic detail - lists features but could use more depth"
+                elif desc_word_count > 15:
+                    detail_score = 4
+                    detail_reason = "Minimal detail - very brief and generic"
+                else:
+                    detail_score = 0
+                    detail_reason = "No meaningful description provided"
+                
+                # B. Alignment with Title (10 marks)
                 alignment_score = 0
-                alignment_reason = "No alignment - description unrelated to title"
-            
-            description_score = detail_score + alignment_score
-            
-            # === PART 3: FILES EVALUATION (65 marks) ===
-            files_score = 0
-            files_breakdown = []
-            relevant_files_count = 0
-            useless_files_count = 0
-            
-            if not file_analysis or not file_analysis.get('has_file'):
+                alignment_reason = ""
+                
+                # Check if description explains the project mentioned in title
+                title_keywords = set(project_title.lower().split()) - {'a', 'an', 'the', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'using', 'and'}
+                desc_keywords = set(project_description.lower().split())
+                title_in_desc_ratio = len(title_keywords.intersection(desc_keywords)) / max(len(title_keywords), 1)
+                
+                # More reasonable alignment scoring
+                if title_in_desc_ratio >= 0.7 and not is_generic_description and has_implementation_detail:
+                    alignment_score = 9
+                    alignment_reason = "Perfect alignment - description thoroughly explains title claims"
+                elif title_in_desc_ratio >= 0.5 and not is_generic_description:
+                    alignment_score = 8
+                    alignment_reason = "Strong alignment - description relates well to title"
+                elif title_in_desc_ratio >= 0.3:
+                    alignment_score = 6
+                    alignment_reason = "Good alignment - description covers title aspects"
+                elif title_in_desc_ratio >= 0.15:
+                    alignment_score = 4
+                    alignment_reason = "Partial alignment - some gaps or inconsistencies"
+                elif title_in_desc_ratio > 0:
+                    alignment_score = 2
+                    alignment_reason = "Weak alignment - description barely relates to title"
+                else:
+                    alignment_score = 0
+                    alignment_reason = "No alignment - description unrelated to title"
+                
+                description_score = detail_score + alignment_score
+                
+                # === PART 3: FILES EVALUATION (65 marks) ===
                 files_score = 0
-                files_breakdown.append({
-                    'filename': 'No files',
-                    'is_relevant': False,
-                    'marks_given': 0,
-                    'reason': 'No files uploaded - cannot verify implementation'
-                })
-            else:
-                # Analyze each file
-                for file_info in all_files_analysis:
-                    filename = file_info.get('filename', 'Unknown')
-                    is_code = file_info.get('is_code_file', False)
-                    is_project = file_info.get('is_project_file', False)
-                    issues = file_info.get('detected_issues', [])
-                    quality = file_info.get('code_quality_indicators', [])
-                    
-                    file_marks = 0
-                    file_relevant = True
+                files_breakdown = []
+                relevant_files_count = 0
+                useless_files_count = 0
+                
+                if not file_analysis or not file_analysis.get('has_file'):
+                    files_score = 0
+                    files_breakdown.append({
+                        'filename': 'No files',
+                        'is_relevant': False,
+                        'marks_given': 0,
+                        'reason': 'No files uploaded - cannot verify implementation'
+                    })
+                else:
+                    # Analyze each file
+                    for file_info in all_files_analysis:
+                        filename = file_info.get('filename', 'Unknown')
+                        is_code = file_info.get('is_code_file', False)
+                        is_project = file_info.get('is_project_file', False)
+                        issues = file_info.get('detected_issues', [])
+                        quality = file_info.get('code_quality_indicators', [])
+                        
+                        file_marks = 0
+                        file_relevant = True
                     file_reason = ""
                     
                     # Check if file is useless
@@ -16343,11 +17263,70 @@ Return ONLY valid JSON with the exact structure shown above."""
                         if any('Month' in q and 'skills' in q for q in quality):
                             file_marks += 10
                         
-                        # No penalties - marks based only on positive qualities found
+                        # BONUS: Check if file addresses expected project
+                        project_alignment_found = False
+                        if expected_project:
+                            # Check if file has quality indicators showing project alignment
+                            for q in quality:
+                                if 'addresses expected project' in q.lower() or \
+                                   'aligns with expected project' in q.lower() or \
+                                   'relates to expected project' in q.lower():
+                                    file_marks += 8  # Bonus for clearly addressing expected project
+                                    project_alignment_found = True
+                                    break
+                            
+                            # Check if file uses AI Vision confirmation
+                            if any('ai vision confirmed' in q.lower() for q in quality):
+                                file_marks += 5  # Bonus for AI-verified relevance
+                        
+                        # Penalty: Check if file doesn't relate to expected project
+                        project_misalignment_found = False
+                        for issue in issues:
+                            if 'does not clearly relate to expected project' in issue.lower():
+                                file_marks -= 5  # Penalty for not addressing expected project
+                                project_misalignment_found = True
+                                break
+                        
+                        # BONUS/PENALTY: Check code efficiency
+                        efficiency_bonus = 0
+                        efficiency_penalty = 0
+                        has_efficient_code = False
+                        has_inefficient_code = False
+                        
+                        for q in quality:
+                            if 'efficient code:' in q.lower() or 'code uses efficient algorithms' in q.lower():
+                                efficiency_bonus += 2  # +2 marks per efficient pattern (max 3 patterns)
+                                has_efficient_code = True
+                        
+                        for issue in issues:
+                            if 'inefficient pattern:' in issue.lower() or 'code has multiple inefficient patterns' in issue.lower():
+                                efficiency_penalty += 2  # -2 marks per inefficient pattern (max 3 patterns)
+                                has_inefficient_code = True
+                        
+                        # Cap efficiency bonus/penalty
+                        efficiency_bonus = min(efficiency_bonus, 6)  # Max +6 for efficiency
+                        efficiency_penalty = min(efficiency_penalty, 6)  # Max -6 for inefficiency
+                        
+                        file_marks += efficiency_bonus
+                        file_marks -= efficiency_penalty
+                        
+                        # No other penalties - marks based only on positive qualities found
                         # If file has issues, it simply gets fewer marks (not negative deductions)
                         
                         file_marks = max(0, min(file_marks, 50))  # Cap per file at 50
-                        file_reason = f"{'Code' if is_code else 'Project'} file - {len(quality)} quality indicators, {len(issues)} issues"
+                        
+                        # Enhanced reason with project alignment and efficiency info
+                        reason_parts = [f"{'Code' if is_code else 'Project'} file - {len(quality)} quality indicators"]
+                        if project_alignment_found:
+                            reason_parts.append("addresses expected project (+8)")
+                        if project_misalignment_found:
+                            reason_parts.append("weak project alignment (-5)")
+                        if has_efficient_code:
+                            reason_parts.append(f"efficient code (+{efficiency_bonus})")
+                        if has_inefficient_code:
+                            reason_parts.append(f"inefficient patterns (-{efficiency_penalty})")
+                        reason_parts.append(f"{len(issues)} issues")
+                        file_reason = ', '.join(reason_parts)
                     else:
                         file_relevant = False
                         useless_files_count += 1
@@ -16364,145 +17343,145 @@ Return ONLY valid JSON with the exact structure shown above."""
                 
                 # Cap files score at 65
                 files_score = min(files_score, 65)
-            
-            # Calculate total score
-            base_score = title_score + description_score + files_score
-            base_score = max(0, min(100, base_score))
-            
-            # Determine grade
-            if base_score >= 90: grade = 'A'
-            elif base_score >= 80: grade = 'B+'
-            elif base_score >= 70: grade = 'B'
-            elif base_score >= 60: grade = 'C+'
-            elif base_score >= 50: grade = 'C'
-            elif base_score >= 40: grade = 'D'
-            else: grade = 'F'
-            
-            # Build strengths based on new scoring
-            strengths = []
-            
-            if title_score >= 4:
-                strengths.append(f'Title matches expected Month {current_month} project ({title_score}/5)')
-            if detail_score >= 14:
-                strengths.append(f'Description provides good technical detail ({detail_score}/20)')
-            if alignment_score >= 7:
-                strengths.append(f'Description aligns well with title ({alignment_score}/10)')
-            if relevant_files_count > 0:
-                strengths.append(f'{relevant_files_count} relevant file(s) uploaded demonstrating implementation')
-            if files_score >= 40:
-                strengths.append(f'Files show good quality implementation ({files_score}/65)')
-            
-            if not strengths:
-                strengths.append('Project submission received')
-            
-            # Build weaknesses
-            weaknesses = []
-            
-            if title_score < 3:
-                weaknesses.append(f'Title does not match expected Month {current_month} project ({title_score}/5)')
-            if detail_score < 11:
-                weaknesses.append(f'Description lacks technical depth and detail ({detail_score}/20)')
-            if alignment_score < 6:
-                weaknesses.append(f'Description does not align well with title ({alignment_score}/10)')
-            if useless_files_count > 0:
-                weaknesses.append(f'Uploaded {useless_files_count} useless/irrelevant file(s) - received 0 marks')
-            if relevant_files_count == 0:
-                weaknesses.append('No relevant files uploaded - cannot verify implementation')
-            if files_score < 30:
-                weaknesses.append(f'Files show poor quality or incomplete implementation ({files_score}/65)')
-            
-            # Build improvements
-            improvements = []
-            
-            if title_score < 5:
-                improvements.append(f'Align project title with expected Month {current_month} project: {expected_project}')
-            if detail_score < 16:
-                improvements.append('Add more technical detail to description: explain implementation approach, algorithms, data structures')
-            if alignment_score < 8:
-                improvements.append('Ensure description thoroughly explains what the title claims - be specific about features')
-            if useless_files_count > 0:
-                improvements.append(f'Remove {useless_files_count} irrelevant file(s) - only upload files needed for the project')
-            if relevant_files_count == 0:
-                improvements.append('Upload project files to demonstrate implementation (code, screenshots, documentation)')
-            if files_score < 40:
-                improvements.append('Improve file quality: add error handling, testing, proper structure, and Month skills')
-            
-            if not improvements:
-                improvements.append('Continue following best practices and Month curriculum')
-            
-            # Build detailed, personalized feedback
-            files_summary = f"{relevant_files_count} relevant file(s), {useless_files_count} useless file(s)" if file_analysis and file_analysis.get('has_file') else "No files uploaded"
-            
-            # Create detailed file-by-file analysis for feedback
-            file_analysis_text = ""
-            if all_files_analysis and len(all_files_analysis) > 0:
-                file_analysis_text += "\n\nFILE-BY-FILE ANALYSIS\n\n"
-                for idx, file_info in enumerate(all_files_analysis, 1):
-                    file_breakdown = files_breakdown[idx-1] if idx <= len(files_breakdown) else {}
-                    filename = file_info.get('filename', 'Unknown')
-                    marks = file_breakdown.get('marks_given', 0)
-                    reason = file_breakdown.get('reason', '')
-                    is_relevant = file_breakdown.get('is_relevant', False)
-                    
-                    file_analysis_text += f"\n{idx}. {filename}\n"
-                    if is_relevant:
-                        file_analysis_text += f"   RELEVANT - Received {marks} marks\n"
-                        file_analysis_text += f"   Reason: {reason}\n"
-                        # Add specific quality indicators found
-                        qualities = file_info.get('code_quality_indicators', [])
-                        if qualities:
-                            file_analysis_text += f"   Strengths: {', '.join(qualities[:3])}\n"
-                    else:
-                        file_analysis_text += f"   IRRELEVANT - 0 marks\n"
-                        file_analysis_text += f"   Reason: {reason}\n"
-                    
-                    # Add issues if present
-                    issues = file_info.get('detected_issues', [])
-                    if issues and is_relevant:
-                        file_analysis_text += f"   Issues found: {', '.join(issues[:2])}\n"
-            
-            # Build professional guidance paragraphs
-            title_guidance = ""
-            if title_score < 3:
-                title_guidance = f"Your project title '{project_title}' doesn't align with the expected Month {current_month} project: '{expected_project}'. This makes it difficult to assess whether you're demonstrating the required skills. Make sure your title clearly indicates what you're building and matches the monthly curriculum."
-            elif title_score < 5:
-                title_guidance = f"Your project title is close to the expected '{expected_project}', but could be more specific. A clear, descriptive title helps evaluators understand your project immediately."
-            
-            description_guidance = ""
-            if detail_score < 11:
-                description_guidance = f"Your description lacks technical depth (scored {detail_score}/20 for detail). I need to see: (1) WHAT you built - specific features and functionality, (2) HOW you built it - technologies, frameworks, and implementation approach, (3) WHY you made certain technical decisions. Current description has only {len(project_description.split())} words with minimal technical terms. Aim for 100+ words explaining the architecture, data flow, and key algorithms used."
-            elif detail_score < 16:
-                description_guidance = f"Your description provides some detail ({detail_score}/20) but needs more technical specificity. Explain implementation patterns, data structures used, and any challenges you solved. Don't just list features - explain HOW they work."
-            
-            if alignment_score < 6:
-                description_guidance += f" Additionally, your description doesn't align well with your title (scored {alignment_score}/10). Make sure every claim in the title is thoroughly explained in the description."
-            
-            files_guidance = ""
-            if useless_files_count > 0:
-                useless_file_names = [f['filename'] for f in files_breakdown if not f.get('is_relevant', False)]
-                files_guidance = f"CRITICAL ISSUE: You uploaded {useless_files_count} irrelevant file(s) - {', '.join(useless_file_names)} - which received 0 marks. "
                 
-                # Explain what's wrong with each irrelevant file
-                for file_breakdown_item in files_breakdown:
-                    if not file_breakdown_item.get('is_relevant', False):
-                        filename = file_breakdown_item.get('filename', '')
-                        reason = file_breakdown_item.get('reason', '')
-                        files_guidance += f"'{filename}' was rejected because: {reason}. "
+                # Calculate total score
+                base_score = title_score + description_score + files_score
+                base_score = max(0, min(100, base_score))
                 
-                files_guidance += f"For a {expected_project} project, I expect to see: (1) Source code files (.py/.js/.java), (2) Screenshots of running application, (3) Documentation explaining setup. Every file you upload should directly contribute to proving you built this project."
-            
-            if relevant_files_count == 0:
-                files_guidance = f"NO RELEVANT FILES: You didn't upload any code or project artifacts I could evaluate. For Month {current_month} project '{expected_project}', I need: (1) Main implementation code, (2) Evidence of working project (screenshots/output), (3) Optional: tests, documentation, data files. Without these, I cannot verify you actually built the project described."
-            elif files_score < 30:
-                files_guidance += f" Your uploaded files scored only {files_score}/65, indicating quality issues. "
-                common_issues = []
-                for file_info in all_files_analysis:
-                    common_issues.extend(file_info.get('detected_issues', []))
-                if common_issues:
-                    files_guidance += f"Common problems I found: {', '.join(list(set(common_issues))[:3])}. "
-            
-            # Build comprehensive feedback with clear structure
-            feedback = f"""I personally reviewed your Month {current_month} project submission and here's my detailed evaluation.
+                # Determine grade
+                if base_score >= 90: grade = 'A'
+                elif base_score >= 80: grade = 'B+'
+                elif base_score >= 70: grade = 'B'
+                elif base_score >= 60: grade = 'C+'
+                elif base_score >= 50: grade = 'C'
+                elif base_score >= 40: grade = 'D'
+                else: grade = 'F'
+                
+                # Build strengths based on new scoring
+                strengths = []
+                
+                if title_score >= 4:
+                    strengths.append(f'Title matches expected Month {current_month} project ({title_score}/5)')
+                if detail_score >= 14:
+                    strengths.append(f'Description provides good technical detail ({detail_score}/20)')
+                if alignment_score >= 7:
+                    strengths.append(f'Description aligns well with title ({alignment_score}/10)')
+                if relevant_files_count > 0:
+                    strengths.append(f'{relevant_files_count} relevant file(s) uploaded demonstrating implementation')
+                if files_score >= 40:
+                    strengths.append(f'Files show good quality implementation ({files_score}/65)')
+                
+                if not strengths:
+                    strengths.append('Project submission received')
+                
+                # Build weaknesses
+                weaknesses = []
+                
+                if title_score < 3:
+                    weaknesses.append(f'Title does not match expected Month {current_month} project ({title_score}/5)')
+                if detail_score < 11:
+                    weaknesses.append(f'Description lacks technical depth and detail ({detail_score}/20)')
+                if alignment_score < 6:
+                    weaknesses.append(f'Description does not align well with title ({alignment_score}/10)')
+                if useless_files_count > 0:
+                    weaknesses.append(f'Uploaded {useless_files_count} useless/irrelevant file(s) - received 0 marks')
+                if relevant_files_count == 0:
+                    weaknesses.append('No relevant files uploaded - cannot verify implementation')
+                if files_score < 30:
+                    weaknesses.append(f'Files show poor quality or incomplete implementation ({files_score}/65)')
+                
+                # Build improvements
+                improvements = []
+                
+                if title_score < 5:
+                    improvements.append(f'Align project title with expected Month {current_month} project: {expected_project}')
+                if detail_score < 16:
+                    improvements.append('Add more technical detail to description: explain implementation approach, algorithms, data structures')
+                if alignment_score < 8:
+                    improvements.append('Ensure description thoroughly explains what the title claims - be specific about features')
+                if useless_files_count > 0:
+                    improvements.append(f'Remove {useless_files_count} irrelevant file(s) - only upload files needed for the project')
+                if relevant_files_count == 0:
+                    improvements.append('Upload project files to demonstrate implementation (code, screenshots, documentation)')
+                if files_score < 40:
+                    improvements.append('Improve file quality: add error handling, testing, proper structure, and Month skills')
+                
+                if not improvements:
+                    improvements.append('Continue following best practices and Month curriculum')
+                
+                # Build detailed, personalized feedback
+                files_summary = f"{relevant_files_count} relevant file(s), {useless_files_count} useless file(s)" if file_analysis and file_analysis.get('has_file') else "No files uploaded"
+                
+                # Create detailed file-by-file analysis for feedback
+                file_analysis_text = ""
+                if all_files_analysis and len(all_files_analysis) > 0:
+                    file_analysis_text += "\n\nFILE-BY-FILE ANALYSIS\n\n"
+                    for idx, file_info in enumerate(all_files_analysis, 1):
+                        file_breakdown = files_breakdown[idx-1] if idx <= len(files_breakdown) else {}
+                        filename = file_info.get('filename', 'Unknown')
+                        marks = file_breakdown.get('marks_given', 0)
+                        reason = file_breakdown.get('reason', '')
+                        is_relevant = file_breakdown.get('is_relevant', False)
+                        
+                        file_analysis_text += f"\n{idx}. {filename}\n"
+                        if is_relevant:
+                            file_analysis_text += f"   RELEVANT - Received {marks} marks\n"
+                            file_analysis_text += f"   Reason: {reason}\n"
+                            # Add specific quality indicators found
+                            qualities = file_info.get('code_quality_indicators', [])
+                            if qualities:
+                                file_analysis_text += f"   Strengths: {', '.join(qualities[:3])}\n"
+                        else:
+                            file_analysis_text += f"   IRRELEVANT - 0 marks\n"
+                            file_analysis_text += f"   Reason: {reason}\n"
+                        
+                        # Add issues if present
+                        issues = file_info.get('detected_issues', [])
+                        if issues and is_relevant:
+                            file_analysis_text += f"   Issues found: {', '.join(issues[:2])}\n"
+                
+                # Build professional guidance paragraphs
+                title_guidance = ""
+                if title_score < 3:
+                    title_guidance = f"Your project title '{project_title}' doesn't align with the expected Month {current_month} project: '{expected_project}'. This makes it difficult to assess whether you're demonstrating the required skills. Make sure your title clearly indicates what you're building and matches the monthly curriculum."
+                elif title_score < 5:
+                    title_guidance = f"Your project title is close to the expected '{expected_project}', but could be more specific. A clear, descriptive title helps evaluators understand your project immediately."
+                
+                description_guidance = ""
+                if detail_score < 11:
+                    description_guidance = f"Your description lacks technical depth (scored {detail_score}/20 for detail). I need to see: (1) WHAT you built - specific features and functionality, (2) HOW you built it - technologies, frameworks, and implementation approach, (3) WHY you made certain technical decisions. Current description has only {len(project_description.split())} words with minimal technical terms. Aim for 100+ words explaining the architecture, data flow, and key algorithms used."
+                elif detail_score < 16:
+                    description_guidance = f"Your description provides some detail ({detail_score}/20) but needs more technical specificity. Explain implementation patterns, data structures used, and any challenges you solved. Don't just list features - explain HOW they work."
+                
+                if alignment_score < 6:
+                    description_guidance += f" Additionally, your description doesn't align well with your title (scored {alignment_score}/10). Make sure every claim in the title is thoroughly explained in the description."
+                
+                files_guidance = ""
+                if useless_files_count > 0:
+                    useless_file_names = [f['filename'] for f in files_breakdown if not f.get('is_relevant', False)]
+                    files_guidance = f"CRITICAL ISSUE: You uploaded {useless_files_count} irrelevant file(s) - {', '.join(useless_file_names)} - which received 0 marks. "
+                    
+                    # Explain what's wrong with each irrelevant file
+                    for file_breakdown_item in files_breakdown:
+                        if not file_breakdown_item.get('is_relevant', False):
+                            filename = file_breakdown_item.get('filename', '')
+                            reason = file_breakdown_item.get('reason', '')
+                            files_guidance += f"'{filename}' was rejected because: {reason}. "
+                    
+                    files_guidance += f"For a {expected_project} project, I expect to see: (1) Source code files (.py/.js/.java), (2) Screenshots of running application, (3) Documentation explaining setup. Every file you upload should directly contribute to proving you built this project."
+                
+                if relevant_files_count == 0:
+                    files_guidance = f"NO RELEVANT FILES: You didn't upload any code or project artifacts I could evaluate. For Month {current_month} project '{expected_project}', I need: (1) Main implementation code, (2) Evidence of working project (screenshots/output), (3) Optional: tests, documentation, data files. Without these, I cannot verify you actually built the project described."
+                elif files_score < 30:
+                    files_guidance += f" Your uploaded files scored only {files_score}/65, indicating quality issues. "
+                    common_issues = []
+                    for file_info in all_files_analysis:
+                        common_issues.extend(file_info.get('detected_issues', []))
+                    if common_issues:
+                        files_guidance += f"Common problems I found: {', '.join(list(set(common_issues))[:3])}. "
+                
+                # Build comprehensive feedback with clear structure
+                feedback = f"""I personally reviewed your Month {current_month} project submission and here's my detailed evaluation.
 
 **SCORE SUMMARY**
 Your project scored {base_score}/100 ({grade} grade)
@@ -16539,37 +17518,37 @@ Status: {'✅ Good - I can see you applied these skills' if files_score >= 40 el
 **FINAL RECOMMENDATION**
 {'Keep up the good work! Focus on the improvements above to reach A grade.' if base_score >= 70 else 'You have potential, but this submission needs significant improvement. Review the Month ' + str(current_month) + ' materials and rebuild with proper implementation.'}
 """
-            
-            evaluation_result = {
-                'score': int(base_score),
-                'title_score': title_score,
-                'description_score': description_score,
-                'files_score': files_score,
-                'grade': grade,
-                'title_evaluation': {
-                    'score': title_score,
-                    'reason': title_reason
-                },
-                'description_evaluation': {
-                    'score': description_score,
-                    'detail_score': detail_score,
-                    'detail_reason': detail_reason,
-                    'alignment_score': alignment_score,
-                    'alignment_reason': alignment_reason
-                },
-                'files_evaluation': {
-                    'score': files_score,
-                    'files_breakdown': files_breakdown,
-                    'total_files_uploaded': len(all_files_analysis) if all_files_analysis else 0,
-                    'relevant_files': relevant_files_count,
-                    'useless_files': useless_files_count,
-                    'summary': files_summary
-                },
-                'strengths': strengths,
-                'weaknesses': weaknesses,
-                'improvements': improvements,
-                'feedback': feedback
-            }
+                
+                evaluation_result = {
+                    'score': int(base_score),
+                    'title_score': title_score,
+                    'description_score': description_score,
+                    'files_score': files_score,
+                    'grade': grade,
+                    'title_evaluation': {
+                        'score': title_score,
+                        'reason': title_reason
+                    },
+                    'description_evaluation': {
+                        'score': description_score,
+                        'detail_score': detail_score,
+                        'detail_reason': detail_reason,
+                        'alignment_score': alignment_score,
+                        'alignment_reason': alignment_reason
+                    },
+                    'files_evaluation': {
+                        'score': files_score,
+                        'files_breakdown': files_breakdown,
+                        'total_files_uploaded': len(all_files_analysis) if all_files_analysis else 0,
+                        'relevant_files': relevant_files_count,
+                        'useless_files': useless_files_count,
+                        'summary': files_summary
+                    },
+                    'strengths': strengths,
+                    'weaknesses': weaknesses,
+                    'improvements': improvements,
+                    'feedback': feedback
+                }
         
         # Save to database with complete file data
         submissions_collection = db['project_submissions']
@@ -16579,6 +17558,8 @@ Status: {'✅ Good - I can see you applied these skills' if files_score >= 40 el
             'month': current_month,
             'projectTitle': project_title,
             'projectDescription': project_description,
+            'submissionType': submission_type,  # 'file' or 'repo'
+            'repoLink': repo_link if submission_type == 'repo' else None,
             'filesInfo': files_info,  # Array of file information
             'filesContent': files_content,  # Array of file contents in base64
             'totalFiles': len(files_info),
@@ -16603,6 +17584,14 @@ Status: {'✅ Good - I can see you applied these skills' if files_score >= 40 el
         
         print(f"Project submission saved with ID: {submission_id}")
         
+        # Cleanup: Delete cloned repository if it exists
+        if repo_clone_path and os.path.exists(repo_clone_path):
+            try:
+                shutil.rmtree(repo_clone_path)
+                print(f"🗑️ Cleaned up cloned repository: {repo_clone_path}")
+            except Exception as cleanup_error:
+                print(f"⚠️ Failed to cleanup repository: {str(cleanup_error)}")
+        
         return jsonify({
             'success': True,
             'message': 'Project evaluated successfully',
@@ -16620,6 +17609,14 @@ Status: {'✅ Good - I can see you applied these skills' if files_score >= 40 el
         }), 200
         
     except Exception as e:
+        # Cleanup: Delete cloned repository if it exists
+        if 'repo_clone_path' in locals() and repo_clone_path and os.path.exists(repo_clone_path):
+            try:
+                shutil.rmtree(repo_clone_path)
+                print(f"🗑️ Cleaned up cloned repository after error: {repo_clone_path}")
+            except Exception as cleanup_error:
+                print(f"⚠️ Failed to cleanup repository: {str(cleanup_error)}")
+        
         import traceback
         traceback.print_exc()
         return jsonify({
