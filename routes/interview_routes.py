@@ -15,7 +15,7 @@ def get_db_lazy():
 
 def get_object_id(id_str):
     from bson import ObjectId
-    return get_object_id(id_str)
+    return ObjectId(id_str)
 
 interview_bp = Blueprint('interview', __name__, url_prefix='/api/interview')
 
