@@ -1034,6 +1034,23 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     }
 
+@app.route('/api/debug/routes', methods=['GET'])
+def debug_routes():
+    """List all registered routes for debugging"""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods - {'HEAD', 'OPTIONS'}),
+            'rule': rule.rule
+        })
+    interview_routes = [r for r in routes if 'interview' in r['rule'].lower() or 'interview' in r['endpoint'].lower()]
+    return {
+        'total_routes': len(routes),
+        'interview_routes': interview_routes,
+        'sample_routes': routes[:20]
+    }
+
 
 @app.route('/api/get-courses-for-topics', methods=['POST'])
 def get_courses_for_topics():
