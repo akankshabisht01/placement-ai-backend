@@ -80,12 +80,25 @@ def start_interview():
         phone_number = data.get('phone_number', '')
         position = data.get('position', 'Software Developer')
         
+        # Clean up old sessions (older than 30 minutes) to prevent memory leaks
+        current_time = datetime.utcnow()
+        expired_sessions = [
+            sid for sid, sess in active_sessions.items()
+            if (current_time - sess.started_at).total_seconds() > 1800
+        ]
+        for sid in expired_sessions:
+            del active_sessions[sid]
+            print(f"[Interview] Cleaned up expired session: {sid}")
+        
         # Generate session ID
         session_id = f"interview_{datetime.now().timestamp()}"
         
         # Create new interview session
         interview_session = InterviewSession(session_id, user_name, phone_number, position)
         active_sessions[session_id] = interview_session
+        
+        print(f"[Interview] Created new session: {session_id} for user: {user_name}")
+        print(f"[Interview] Total active sessions: {len(active_sessions)}")
         
         # Generate greeting
         greeting = f"Hello {user_name}! I'm Alex, your AI interviewer. I'll be conducting a mock interview for the {position} position. How are you doing today?"
@@ -113,14 +126,20 @@ def process_response():
         session_id = data.get('session_id')
         user_message = data.get('message', '')
         
+        print(f"[Interview] Processing response for session: {session_id}")
+        print(f"[Interview] Active sessions: {list(active_sessions.keys())}")
+        
         # Get session
         if session_id not in active_sessions:
+            print(f"[Interview] Session {session_id} not found in active_sessions")
             return jsonify({
                 "success": False,
-                "error": "Session not found"
+                "error": "Session expired or not found. Please restart the interview.",
+                "session_expired": True
             }), 404
         
         interview_session = active_sessions[session_id]
+        print(f"[Interview] Found session for user: {interview_session.user_name}, question count: {interview_session.question_count}")
         
         # Add user message to history
         interview_session.conversation_history.append({

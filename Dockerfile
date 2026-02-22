@@ -39,5 +39,6 @@ RUN echo "=== Contents of /app ===" && ls -la /app/ && \
 # Expose port
 EXPOSE 8080
 
-# Use gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120", "app:app"]
+# Use gunicorn for production - single worker with threads for session consistency
+# (in-memory sessions are not shared between workers)
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--timeout", "120", "app:app"]
