@@ -6,26 +6,26 @@ from flask import Blueprint, request, jsonify, session
 from datetime import datetime
 import os
 import json
+import re
 import requests
-
-# Lazy imports at function level to avoid import errors
-def get_db_lazy():
-    from utils.db import get_db
-    return get_db()
-
-def get_object_id(id_str):
-    from bson import ObjectId
-    return ObjectId(id_str)
+from utils.db import get_db
+from bson import ObjectId
 
 interview_bp = Blueprint('interview', __name__, url_prefix='/api/interview')
 
-# Health check endpoint
-@interview_bp.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({"status": "ok", "module": "interview"})
-
 # Perplexity API configuration
 PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
+
+def clean_ai_response(text):
+    """Remove Perplexity citation markers [1], [2], etc. and clean response"""
+    if not text:
+        return text
+    # Remove citation markers like [1], [2], [1][2], etc.
+    cleaned = re.sub(r'\[\d+\]', '', text)
+    # Remove multiple spaces that may result
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    # Remove any leading/trailing whitespace
+    return cleaned.strip()
 
 def get_perplexity_key():
     """Get Perplexity API key from environment at request time"""
@@ -80,25 +80,12 @@ def start_interview():
         phone_number = data.get('phone_number', '')
         position = data.get('position', 'Software Developer')
         
-        # Clean up old sessions (older than 30 minutes) to prevent memory leaks
-        current_time = datetime.utcnow()
-        expired_sessions = [
-            sid for sid, sess in active_sessions.items()
-            if (current_time - sess.started_at).total_seconds() > 1800
-        ]
-        for sid in expired_sessions:
-            del active_sessions[sid]
-            print(f"[Interview] Cleaned up expired session: {sid}")
-        
         # Generate session ID
         session_id = f"interview_{datetime.now().timestamp()}"
         
         # Create new interview session
         interview_session = InterviewSession(session_id, user_name, phone_number, position)
         active_sessions[session_id] = interview_session
-        
-        print(f"[Interview] Created new session: {session_id} for user: {user_name}")
-        print(f"[Interview] Total active sessions: {len(active_sessions)}")
         
         # Generate greeting
         greeting = f"Hello {user_name}! I'm Alex, your AI interviewer. I'll be conducting a mock interview for the {position} position. How are you doing today?"
@@ -126,20 +113,14 @@ def process_response():
         session_id = data.get('session_id')
         user_message = data.get('message', '')
         
-        print(f"[Interview] Processing response for session: {session_id}")
-        print(f"[Interview] Active sessions: {list(active_sessions.keys())}")
-        
         # Get session
         if session_id not in active_sessions:
-            print(f"[Interview] Session {session_id} not found in active_sessions")
             return jsonify({
                 "success": False,
-                "error": "Session expired or not found. Please restart the interview.",
-                "session_expired": True
+                "error": "Session not found"
             }), 404
         
         interview_session = active_sessions[session_id]
-        print(f"[Interview] Found session for user: {interview_session.user_name}, question count: {interview_session.question_count}")
         
         # Add user message to history
         interview_session.conversation_history.append({
@@ -181,7 +162,7 @@ def process_response():
             
             if response.status_code == 200:
                 result = response.json()
-                ai_message = result['choices'][0]['message']['content']
+                ai_message = clean_ai_response(result['choices'][0]['message']['content'])
                 
                 # Update conversation history
                 interview_session.conversation_history.append({
@@ -254,7 +235,7 @@ def end_interview():
         feedback = generate_interview_feedback(interview_session)
         
         # Save to database
-        db = get_db_lazy()
+        db = get_db()
         interview_data = {
             **interview_session.to_dict(),
             "ended_at": datetime.utcnow(),
@@ -285,7 +266,7 @@ def end_interview():
 def get_interview_history(phone_number):
     """Get interview history for a user"""
     try:
-        db = get_db_lazy()
+        db = get_db()
         interviews = list(db.interviews.find(
             {"phone_number": phone_number}
         ).sort("started_at", -1).limit(10))
@@ -314,8 +295,8 @@ def get_interview_history(phone_number):
 def get_interview_feedback(interview_id):
     """Get feedback for a specific interview"""
     try:
-        db = get_db_lazy()
-        interview = db.interviews.find_one({"_id": get_object_id(interview_id)})
+        db = get_db()
+        interview = db.interviews.find_one({"_id": ObjectId(interview_id)})
         
         if not interview:
             return jsonify({
