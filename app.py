@@ -41,7 +41,7 @@ if sys.platform == 'win32':
     except:
         pass  # Python < 3.7 doesn't have reconfigure
 
-load_dotenv()  # Load env vars like PERPLEXITY_API_KEY
+load_dotenv(override=True)  # Load env vars from .env, overriding system env vars
 
 # Helper function to split combined skills
 def split_combined_skills(skills_list):
@@ -115,31 +115,10 @@ import logging
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# Track interview routes status
-interview_routes_status = {"loaded": False, "error": None}
-
 # Register Interview Routes Blueprint
-try:
-    print("🔄 Attempting to import interview routes...")
-    from routes.interview_routes import interview_bp
-    print("✅ Interview blueprint imported successfully")
-    app.register_blueprint(interview_bp)
-    print("✅ Interview routes registered at /api/interview")
-    interview_routes_status["loaded"] = True
-    # List the registered routes
-    for rule in app.url_map.iter_rules():
-        if 'interview' in rule.endpoint:
-            print(f"  📍 {rule.rule} -> {rule.endpoint}")
-except ImportError as e:
-    import traceback
-    err_msg = f"ImportError: {e}\n{traceback.format_exc()}"
-    print(f"❌ {err_msg}")
-    interview_routes_status["error"] = err_msg
-except Exception as e:
-    import traceback
-    err_msg = f"Exception: {e}\n{traceback.format_exc()}"
-    print(f"⚠️ {err_msg}")
-    interview_routes_status["error"] = err_msg
+from routes.interview_routes import interview_bp
+app.register_blueprint(interview_bp)
+print("✅ Interview routes registered")
 
 # Allow common dev origins (localhost, 127.0.0.1, and LAN IPs) for the API
 # Broaden CORS for local development across any port/host on the LAN
@@ -1038,24 +1017,6 @@ def health_check():
         'service': 'placement-prediction-api',
         'version': '1.0.0',
         'timestamp': datetime.now().isoformat()
-    }
-
-@app.route('/api/debug/routes', methods=['GET'])
-def debug_routes():
-    """List all registered routes for debugging"""
-    routes = []
-    for rule in app.url_map.iter_rules():
-        routes.append({
-            'endpoint': rule.endpoint,
-            'methods': list(rule.methods - {'HEAD', 'OPTIONS'}),
-            'rule': rule.rule
-        })
-    interview_routes = [r for r in routes if 'interview' in r['rule'].lower() or 'interview' in r['endpoint'].lower()]
-    return {
-        'total_routes': len(routes),
-        'interview_routes': interview_routes,
-        'interview_status': interview_routes_status,
-        'sample_routes': routes[:20]
     }
 
 
