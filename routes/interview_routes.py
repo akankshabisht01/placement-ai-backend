@@ -1,50 +1,45 @@
 """
-Interview Module Routes - Flask Integration
-Provides AI interview functionality integrated with existing Placement AI system
+Interview Module Routes - Flask Integration with Groq AI
+Provides AI interview functionality with smart features:
+- Progressive difficulty scaling
+- No duplicate questions
+- Conditional compliments (only for good answers)
+- Position-specific questions
 """
 from flask import Blueprint, request, jsonify, session
 from datetime import datetime
 import os
 import json
 import re
+import random
 import requests
 from utils.db import get_db
 from bson import ObjectId
 
 interview_bp = Blueprint('interview', __name__, url_prefix='/api/interview')
 
-# Perplexity API configuration
-PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
+# Groq API configuration (ULTRA FAST ~200-500ms)
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-def clean_ai_response(text):
-    """Remove Perplexity citation markers [1], [2], etc. and clean response"""
-    if not text:
-        return text
-    # Remove citation markers like [1], [2], [1][2], etc.
-    cleaned = re.sub(r'\[\d+\]', '', text)
-    # Remove multiple spaces that may result
-    cleaned = re.sub(r'\s+', ' ', cleaned)
-    # Remove any leading/trailing whitespace
-    return cleaned.strip()
-
-def get_perplexity_key():
-    """Get Perplexity API key from environment at request time"""
-    key = os.getenv('PERPLEXITY_API_KEY')
+def get_groq_key():
+    """Get Groq API key from environment"""
+    key = os.getenv('GROQ_API_KEY')
     if not key:
-        print("❌ PERPLEXITY_API_KEY not found in environment variables!")
+        print("❌ GROQ_API_KEY not found! Get free key at console.groq.com")
     return key
 
 # Validate key at startup
-_startup_key = os.getenv('PERPLEXITY_API_KEY')
+_startup_key = os.getenv('GROQ_API_KEY')
 if _startup_key:
-    print(f"✅ Perplexity API key loaded: {_startup_key[:8]}...{_startup_key[-4:]}")
+    print(f"✅ Groq API key loaded: {_startup_key[:8]}...{_startup_key[-4:]}")
 else:
-    print("❌ WARNING: PERPLEXITY_API_KEY not set in .env file!")
+    print("❌ WARNING: GROQ_API_KEY not set! Get free key at console.groq.com")
 
-# In-memory session storage (replace with Redis in production)
+# In-memory session storage
 active_sessions = {}
 
 class InterviewSession:
+    """Enhanced interview session with smart features from Groq engine"""
     def __init__(self, session_id, user_name, phone_number, position="Software Developer"):
         self.session_id = session_id
         self.user_name = user_name
@@ -54,8 +49,13 @@ class InterviewSession:
         self.question_count = 0
         self.conversation_history = []
         self.started_at = datetime.utcnow()
-        self.questions_asked = []
+        self.questions_asked = []  # Track to avoid duplicates
+        self.asked_topics = []  # Track question topics
         self.answers = []
+        # Smart features
+        self.difficulty_level = 1  # 1=easy, 2=medium, 3=hard
+        self.correct_answers = 0
+        self.total_questions = 8
     
     def to_dict(self):
         return {
@@ -68,8 +68,195 @@ class InterviewSession:
             "conversation_history": self.conversation_history,
             "started_at": self.started_at.isoformat(),
             "questions_asked": self.questions_asked,
-            "answers": self.answers
+            "answers": self.answers,
+            "difficulty_level": self.difficulty_level,
+            "correct_answers": self.correct_answers
         }
+    
+    def get_question_pool(self):
+        """Get questions organized by difficulty level"""
+        return {
+            1: [  # Easy/Basic questions
+                "your technical skills and background",
+                "daily tools and technologies you use",
+                "your educational background",
+                "why you're interested in this role",
+                "your previous work experience",
+                "your strongest technical skill",
+            ],
+            2: [  # Medium/Intermediate questions
+                "a challenging problem you solved recently",
+                "how you handle tight deadlines and pressure",
+                "your approach to debugging complex issues",
+                "how you stay updated with new technologies",
+                "a project you're most proud of",
+                "how you handle disagreements with team members",
+            ],
+            3: [  # Hard/Advanced questions
+                "your experience with system design and architecture",
+                "how you optimize performance in applications",
+                "your approach to managing technical debt",
+                "how you mentor or help junior developers",
+                "a difficult technical decision you had to make",
+                "how you handle production incidents",
+            ],
+            4: [  # Scenario questions (end of interview)
+                f"SCENARIO: You discover a critical bug in production on Friday evening. Walk me through your approach.",
+                f"SCENARIO: A teammate wrote code that works but is poorly structured. How would you handle this?",
+                f"SCENARIO: Your team disagrees on the technical approach for a project. How do you resolve it?",
+                f"SCENARIO: You're given an impossible deadline by management. What do you do?",
+            ]
+        }
+    
+    def get_next_question_topic(self):
+        """Get next question topic avoiding duplicates"""
+        pool = self.get_question_pool()
+        available = pool.get(self.difficulty_level, pool[2])
+        
+        # Filter out already asked topics
+        unused = [q for q in available if q not in self.asked_topics]
+        
+        # If all used, try other difficulty levels
+        if not unused:
+            for level in [1, 2, 3]:
+                if level != self.difficulty_level:
+                    unused = [q for q in pool.get(level, []) if q not in self.asked_topics]
+                    if unused:
+                        break
+        
+        if not unused:
+            unused = available
+        
+        topic = random.choice(unused) if unused else f"your experience with {self.position}"
+        self.asked_topics.append(topic)
+        return topic
+    
+    def get_scenario_topic(self):
+        """Get a scenario question"""
+        pool = self.get_question_pool()
+        scenarios = pool.get(4, [])
+        unused = [s for s in scenarios if s not in self.asked_topics]
+        if not unused:
+            unused = scenarios
+        scenario = random.choice(unused) if unused else scenarios[0]
+        self.asked_topics.append(scenario)
+        return scenario
+    
+    def analyze_answer(self, message):
+        """Analyze if answer is substantive or casual"""
+        msg_lower = message.lower().strip()
+        
+        casual_phrases = [
+            "doing great", "doing good", "i'm good", "i'm fine", "doing fine",
+            "good thanks", "fine thanks", "how are you", "what about you",
+            "hello", "hi", "hey", "good morning", "good afternoon", "i'm doing well"
+        ]
+        
+        is_casual = any(phrase in msg_lower for phrase in casual_phrases) and len(msg_lower.split()) < 10
+        has_substance = len(message.split()) > 8 and not is_casual
+        
+        return {"is_casual": is_casual, "has_substance": has_substance}
+
+
+def get_smart_system_prompt(session):
+    """Generate intelligent system prompt like Groq engine"""
+    difficulty_desc = {1: "basic/entry-level", 2: "intermediate", 3: "advanced/senior-level"}.get(session.difficulty_level, "intermediate")
+    already_asked = ", ".join(session.asked_topics[-5:]) if session.asked_topics else "none yet"
+    
+    return f"""You are Alex, a professional AI interviewer for the {session.position} position.
+
+CURRENT STATE:
+- Difficulty Level: {session.difficulty_level}/3 ({difficulty_desc})
+- Question #{session.question_count + 1} of {session.total_questions}
+- Already asked about: {already_asked}
+
+STRICT RULES:
+1. ANALYZE the candidate's response quality:
+   - If answer is RELEVANT and shows understanding → Brief appreciation (1-2 words like "Good!" or "Nice!") + next question
+   - If answer is IRRELEVANT, vague, or off-topic → Skip appreciation, just ask next question directly
+   - If answer is casual/social (like "I'm good", "doing great") → Move to next question without praise
+
+2. NEVER repeat a question you already asked (check the "Already asked about" list)
+3. Ask {difficulty_desc} questions appropriate for the current level
+4. Keep total response under 35 words
+5. Ask questions specifically relevant to {session.position}
+6. Never cut off mid-sentence
+
+RESPONSE FORMAT:
+- Good technical answer: "Good! [Next question about new topic]"
+- Poor/irrelevant answer: "[Next question directly without any praise]"
+- Casual social response: "[Next question directly]"
+"""
+
+
+def get_instruction_for_state(session, user_message, answer_analysis):
+    """Get specific instruction based on interview state"""
+    has_substance = answer_analysis["has_substance"]
+    is_casual = answer_analysis["is_casual"]
+    
+    if session.state == "greeting":
+        if is_casual:
+            return f"Skip appreciation. Ask them to introduce themselves and their interest in the {session.position} role. Under 25 words."
+        return f"Briefly acknowledge, then ask them to tell you about themselves and why they're interested in {session.position}. Under 25 words."
+    
+    elif session.state == "introduction":
+        question_topic = session.get_next_question_topic()
+        if has_substance:
+            return f"Say 'Thanks!' briefly, then ask about {question_topic}. Under 30 words."
+        else:
+            return f"Ask about {question_topic} directly without praise. Under 25 words."
+    
+    elif session.state == "interviewing":
+        # Check if time for scenario questions (last 2 questions)
+        if session.question_count >= session.total_questions - 2:
+            scenario_topic = session.get_scenario_topic()
+            if has_substance:
+                return f"Say 'Good!' then present this scenario: {scenario_topic}. Under 45 words total."
+            else:
+                return f"Present this scenario directly: {scenario_topic}. Under 40 words."
+        
+        # Check if time to close
+        if session.question_count >= session.total_questions:
+            return "Thank them warmly and ask if they have any questions for you. Under 20 words."
+        
+        # Get next question based on difficulty
+        question_topic = session.get_next_question_topic()
+        if has_substance:
+            return f"Say 'Good!' or 'Nice!' (1-2 words), then ask about {question_topic}. Under 30 words total."
+        else:
+            return f"Ask about {question_topic} directly without any appreciation. Under 25 words."
+    
+    elif session.state == "closing":
+        return "Give a warm closing, thank them for their time, wish them luck. Under 20 words."
+    
+    return "Respond naturally and professionally as Alex the interviewer."
+
+
+def update_session_state(session, answer_analysis):
+    """Update interview state and difficulty based on answer quality"""
+    has_substance = answer_analysis["has_substance"]
+    
+    if session.state == "greeting":
+        session.state = "introduction"
+    
+    elif session.state == "introduction":
+        session.state = "interviewing"
+        session.question_count = 1
+    
+    elif session.state == "interviewing":
+        session.question_count += 1
+        
+        # Increase difficulty if answer was good
+        if has_substance:
+            session.correct_answers += 1
+            # Increase difficulty every 2 good answers
+            if session.correct_answers % 2 == 0 and session.difficulty_level < 3:
+                session.difficulty_level += 1
+                print(f"⬆️ Difficulty increased to level {session.difficulty_level}")
+        
+        # Check if time to close
+        if session.question_count >= session.total_questions:
+            session.state = "closing"
 
 @interview_bp.route('/start', methods=['POST'])
 def start_interview():
@@ -107,7 +294,10 @@ def start_interview():
 
 @interview_bp.route('/respond', methods=['POST'])
 def process_response():
-    """Process user's response and generate next question"""
+    """Process user's response using Groq AI with smart features"""
+    import time
+    start_time = time.time()
+    
     try:
         data = request.get_json()
         session_id = data.get('session_id')
@@ -117,10 +307,14 @@ def process_response():
         if session_id not in active_sessions:
             return jsonify({
                 "success": False,
-                "error": "Session not found"
+                "error": "Session not found",
+                "session_expired": True
             }), 404
         
         interview_session = active_sessions[session_id]
+        
+        # Analyze user's answer quality
+        answer_analysis = interview_session.analyze_answer(user_message)
         
         # Add user message to history
         interview_session.conversation_history.append({
@@ -129,40 +323,48 @@ def process_response():
         })
         interview_session.answers.append(user_message)
         
-        # Generate AI response using Perplexity
-        system_prompt = get_system_prompt(interview_session)
+        # Generate smart system prompt and instruction
+        system_prompt = get_smart_system_prompt(interview_session)
+        instruction = get_instruction_for_state(interview_session, user_message, answer_analysis)
+        
+        # Combine system prompt with instruction
+        full_system = f"{system_prompt}\n\nCURRENT INSTRUCTION: {instruction}"
         
         try:
-            # Get API key dynamically
-            api_key = get_perplexity_key()
+            api_key = get_groq_key()
             if not api_key:
-                print("❌ No Perplexity API key available, using fallback questions")
-                raise Exception("PERPLEXITY_API_KEY not configured")
+                print("❌ No Groq API key, using fallback")
+                raise Exception("GROQ_API_KEY not configured")
             
-            print(f"[Interview] Calling Perplexity API with key: {api_key[:8]}...")
+            print(f"🚀 Groq API call (Difficulty: {interview_session.difficulty_level}, Q#{interview_session.question_count})")
             
-            # Call Perplexity API
+            # Call Groq API (ULTRA FAST ~200-500ms)
             response = requests.post(
-                PERPLEXITY_API_URL,
+                GROQ_API_URL,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "sonar",
+                    "model": "llama-3.1-8b-instant",
                     "messages": [
-                        {"role": "system", "content": system_prompt},
+                        {"role": "system", "content": full_system},
                         *interview_session.conversation_history[-6:]
                     ],
-                    "temperature": 0.7,
-                    "max_tokens": 150
+                    "temperature": 0.6,
+                    "max_tokens": 200
                 },
-                timeout=30
+                timeout=15
             )
+            
+            elapsed = int((time.time() - start_time) * 1000)
             
             if response.status_code == 200:
                 result = response.json()
-                ai_message = clean_ai_response(result['choices'][0]['message']['content'])
+                ai_message = result['choices'][0]['message']['content']
+                
+                # Clean any weird formatting
+                ai_message = ai_message.strip()
                 
                 # Update conversation history
                 interview_session.conversation_history.append({
@@ -171,41 +373,39 @@ def process_response():
                 })
                 interview_session.questions_asked.append(ai_message)
                 
-                # Update state
-                update_interview_state(interview_session)
+                # Update state and difficulty
+                update_session_state(interview_session, answer_analysis)
+                
+                print(f"⚡ Groq response in {elapsed}ms")
                 
                 return jsonify({
                     "success": True,
                     "message": ai_message,
                     "state": interview_session.state,
                     "question_count": interview_session.question_count,
+                    "difficulty_level": interview_session.difficulty_level,
                     "should_speak": True
                 })
-            elif response.status_code == 401:
-                print(f"❌ Perplexity API 401 Unauthorized - API key may be expired or invalid")
-                print(f"   Key used: {api_key[:8]}...{api_key[-4:]}")
-                print(f"   Please check your PERPLEXITY_API_KEY in .env file")
-                # Fall through to fallback questions
-                raise Exception("Perplexity API key unauthorized (401)")
             else:
-                print(f"Perplexity API error: {response.status_code} - {response.text[:200]}")
-                raise Exception(f"Perplexity API error {response.status_code}")
+                print(f"Groq API error: {response.status_code} - {response.text[:200]}")
+                raise Exception(f"Groq API error {response.status_code}")
         
         except Exception as e:
-            print(f"Error calling Perplexity API: {e}")
+            print(f"Error calling Groq API: {e}")
             # Fallback to predefined questions
             fallback_response = get_fallback_question(interview_session)
             interview_session.conversation_history.append({
                 "role": "assistant",
                 "content": fallback_response
             })
-            update_interview_state(interview_session)
+            update_session_state(interview_session, answer_analysis)
             
             return jsonify({
                 "success": True,
                 "message": fallback_response,
                 "state": interview_session.state,
                 "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
                 "should_speak": True
             })
     
