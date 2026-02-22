@@ -115,6 +115,9 @@ import logging
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
+# Track interview routes status
+interview_routes_status = {"loaded": False, "error": None}
+
 # Register Interview Routes Blueprint
 try:
     print("🔄 Attempting to import interview routes...")
@@ -122,18 +125,21 @@ try:
     print("✅ Interview blueprint imported successfully")
     app.register_blueprint(interview_bp)
     print("✅ Interview routes registered at /api/interview")
+    interview_routes_status["loaded"] = True
     # List the registered routes
     for rule in app.url_map.iter_rules():
         if 'interview' in rule.endpoint:
             print(f"  📍 {rule.rule} -> {rule.endpoint}")
 except ImportError as e:
-    print(f"❌ ImportError loading interview routes: {e}")
     import traceback
-    traceback.print_exc()
+    err_msg = f"ImportError: {e}\n{traceback.format_exc()}"
+    print(f"❌ {err_msg}")
+    interview_routes_status["error"] = err_msg
 except Exception as e:
-    print(f"⚠️ Interview routes not loaded: {e}")
     import traceback
-    traceback.print_exc()
+    err_msg = f"Exception: {e}\n{traceback.format_exc()}"
+    print(f"⚠️ {err_msg}")
+    interview_routes_status["error"] = err_msg
 
 # Allow common dev origins (localhost, 127.0.0.1, and LAN IPs) for the API
 # Broaden CORS for local development across any port/host on the LAN
@@ -1048,6 +1054,7 @@ def debug_routes():
     return {
         'total_routes': len(routes),
         'interview_routes': interview_routes,
+        'interview_status': interview_routes_status,
         'sample_routes': routes[:20]
     }
 
