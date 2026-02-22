@@ -27,12 +27,14 @@ COPY models/ ./models/
 COPY data/ ./data/
 COPY utils/ ./utils/
 COPY templates/ ./templates/
+COPY routes/ ./routes/
 
 # Debug: List what was copied
 RUN echo "=== Contents of /app ===" && ls -la /app/ && \
     echo "=== Contents of /app/models ===" && ls -la /app/models/ && \
     echo "=== Contents of /app/data ===" && ls -la /app/data/ && \
-    echo "=== Contents of /app/utils ===" && ls -la /app/utils/
+    echo "=== Contents of /app/utils ===" && ls -la /app/utils/ && \
+    echo "=== Contents of /app/routes ===" && ls -la /app/routes/
 
 # Expose port
 EXPOSE 8080
