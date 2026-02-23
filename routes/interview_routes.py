@@ -55,6 +55,11 @@ class InterviewSession:
         self.substantive_answers = []  # Only answers with real content (for scoring)
         self.last_question_topic = None  # Track what was just asked for answer matching
         self.quality_scores = []  # Track quality score (0-3) for each answer
+        # Track inappropriate responses
+        self.inappropriate_count = 0  # Abusive/non-English/off-topic responses
+        self.abusive_count = 0  # Abusive language specifically
+        self.non_english_count = 0  # Non-English responses
+        self.off_topic_count = 0  # Off-topic responses
         # Smart features
         self.difficulty_level = 1  # 1=easy, 2=medium, 3=hard
         self.correct_answers = 0
@@ -77,7 +82,11 @@ class InterviewSession:
             "substantive_answers": self.substantive_answers,
             "quality_scores": self.quality_scores,
             "difficulty_level": self.difficulty_level,
-            "correct_answers": self.correct_answers
+            "correct_answers": self.correct_answers,
+            "inappropriate_count": self.inappropriate_count,
+            "abusive_count": self.abusive_count,
+            "non_english_count": self.non_english_count,
+            "off_topic_count": self.off_topic_count
         }
     
     def get_elapsed_minutes(self):
@@ -462,18 +471,26 @@ def get_instruction_for_state(session, user_message, answer_analysis):
     return "Respond naturally and professionally as Alex the interviewer."
 
 
-def get_direct_question(session):
-    """Get a direct question without calling AI - for handling inappropriate responses"""
+def get_direct_question(session, repeat_last=True):
+    """Get a direct question without calling AI - for handling inappropriate responses
+    If repeat_last=True, re-ask the last question (for bad responses)
+    If repeat_last=False, get next question
+    """
     if session.state == "greeting":
         return f"Could you please introduce yourself and tell me about your interest in the {session.position} role?"
     elif session.state == "introduction":
-        topic = session.get_next_question_topic()
-        return f"Tell me about your experience with {topic}."
+        # For introduction, ask them to introduce themselves again
+        return f"Please tell me about yourself and your background relevant to {session.position}."
     elif session.state == "interviewing":
-        topic = session.get_next_question_topic()
-        return f"Let's continue. Can you tell me about {topic}?"
+        # Re-ask the SAME question if they didn't answer properly
+        if repeat_last and session.last_question_topic:
+            return f"Can you please answer: {session.last_question_topic}?"
+        else:
+            topic = session.get_next_question_topic()
+            session.last_question_topic = topic
+            return f"Can you tell me about {topic}?"
     else:
-        return "Let's continue with the interview. What questions do you have for me?"
+        return "Do you have any questions for me?"
 
 
 def update_session_state(session, answer_analysis):
@@ -595,12 +612,15 @@ def process_response():
         
         # === DIRECT HANDLING: Abusive language - don't even call AI ===
         if answer_analysis.get('is_abusive', False):
-            warning_response = "Please maintain professional language during this interview. Let's continue. " + get_direct_question(interview_session)
+            # Track inappropriate response
+            interview_session.inappropriate_count += 1
+            interview_session.abusive_count += 1
+            # Re-ask the SAME question, don't advance state
+            warning_response = "Please maintain professional language. " + get_direct_question(interview_session, repeat_last=True)
             interview_session.conversation_history.append({"role": "user", "content": user_message})
             interview_session.conversation_history.append({"role": "assistant", "content": warning_response})
-            interview_session.answers.append(user_message)
+            # Don't add to answers, don't update state - just re-ask
             interview_session.quality_scores.append(0)
-            update_session_state(interview_session, answer_analysis)
             
             return jsonify({
                 "success": True,
@@ -614,12 +634,15 @@ def process_response():
         
         # === DIRECT HANDLING: Non-English response ===
         if answer_analysis.get('is_non_english', False):
-            english_response = "Please respond in English for this interview. " + get_direct_question(interview_session)
+            # Track inappropriate response
+            interview_session.inappropriate_count += 1
+            interview_session.non_english_count += 1
+            # Re-ask the SAME question, don't advance state
+            english_response = "Please respond in English. " + get_direct_question(interview_session, repeat_last=True)
             interview_session.conversation_history.append({"role": "user", "content": user_message})
             interview_session.conversation_history.append({"role": "assistant", "content": english_response})
-            interview_session.answers.append(user_message)
+            # Don't add to answers, don't update state - just re-ask
             interview_session.quality_scores.append(0)
-            update_session_state(interview_session, answer_analysis)
             
             return jsonify({
                 "success": True,
@@ -633,12 +656,15 @@ def process_response():
         
         # === DIRECT HANDLING: Clearly off-topic (weather, movies, jokes, etc.) ===
         if answer_analysis.get('is_off_topic', False):
-            offtopic_response = "Let's stay focused on the interview. " + get_direct_question(interview_session)
+            # Track inappropriate response
+            interview_session.inappropriate_count += 1
+            interview_session.off_topic_count += 1
+            # Re-ask the SAME question, don't advance state
+            offtopic_response = "Let's focus on the interview. " + get_direct_question(interview_session, repeat_last=True)
             interview_session.conversation_history.append({"role": "user", "content": user_message})
             interview_session.conversation_history.append({"role": "assistant", "content": offtopic_response})
-            interview_session.answers.append(user_message)
+            # Don't add to answers, don't update state - just re-ask
             interview_session.quality_scores.append(0)
-            update_session_state(interview_session, answer_analysis)
             
             return jsonify({
                 "success": True,
@@ -1198,19 +1224,22 @@ CANDIDATE METRICS:
 - Average response length: {quality['avg_length']} words
 - Technical keywords used: {quality['technical_keywords']}
 - Casual/filler phrases: {quality['casual_count']}
+- INAPPROPRIATE RESPONSES: {session.inappropriate_count} total ({session.abusive_count} abusive, {session.non_english_count} non-English, {session.off_topic_count} off-topic)
 
 CRITICAL SCORING RULES:
-1. If most responses were off-topic/casual (substantive < 50%), scores should be LOW (20-40)
-2. If candidate said "I don't know" frequently, technical_knowledge should be LOW
-3. Short vague answers = LOW scores (30-50)
-4. Only give 70+ for specific examples and demonstrated knowledge
-5. Only give 85+ for exceptional detail with real project examples
+1. If ANY abusive language was used, professionalism MUST be 20 or below
+2. If multiple inappropriate responses ({session.inappropriate_count}), communication should be LOW (20-40)
+3. If most responses were off-topic/casual (substantive < 50%), scores should be LOW (20-40)
+4. If candidate said "I don't know" frequently, technical_knowledge should be LOW
+5. Short vague answers = LOW scores (30-50)
+6. Only give 70+ for specific examples and demonstrated knowledge
+7. Only give 85+ for exceptional detail with real project examples
 
 SCORING RUBRIC (0-100):
 - technical_knowledge: 0-30=vague/wrong, 31-50=minimal understanding, 51-70=basic knowledge, 71-85=good with examples, 86-100=expert
-- communication: 0-30=unclear, 31-50=understandable but unstructured, 51-70=clear, 71-85=well-structured, 86-100=excellent STAR method
+- communication: 0-30=unclear/inappropriate, 31-50=understandable but unstructured, 51-70=clear, 71-85=well-structured, 86-100=excellent STAR method
 - problem_solving: 0-30=no analysis, 31-50=basic, 51-70=some approach, 71-85=structured, 86-100=systematic with trade-offs
-- professionalism: 0-30=very casual, 31-50=adequate, 51-70=professional, 71-85=polished, 86-100=exemplary
+- professionalism: 0-30=inappropriate/abusive, 31-50=casual, 51-70=professional, 71-85=polished, 86-100=exemplary
 - enthusiasm: 0-30=disinterested, 31-50=neutral, 51-70=interested, 71-85=eager, 86-100=genuinely passionate
 - confidence: 0-30=very unsure, 31-50=hesitant, 51-70=confident, 71-85=assured, 86-100=poised
 
@@ -1294,6 +1323,17 @@ Respond ONLY with this JSON (no markdown, no explanation):
         
         if quality['casual_count'] > 3:
             scores['professionalism'] = min(scores['professionalism'], 55)
+        
+        # CRITICAL: Penalize for inappropriate behavior
+        if session.abusive_count > 0:
+            print(f"[Interview Feedback] ABUSIVE behavior detected ({session.abusive_count}x) - capping professionalism at 20")
+            scores['professionalism'] = min(scores['professionalism'], 20)
+            scores['communication'] = min(scores['communication'], 35)
+        
+        if session.inappropriate_count > 2:
+            print(f"[Interview Feedback] Multiple inappropriate responses ({session.inappropriate_count}) - reducing scores")
+            scores['communication'] = min(scores['communication'], 40)
+            scores['professionalism'] = min(scores['professionalism'], 40)
         
         # CRITICAL: Cap scores if too few substantive answers
         total_responses = questions_answered if questions_answered > 0 else 1
