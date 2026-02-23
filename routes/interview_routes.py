@@ -23,17 +23,21 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 def get_groq_key():
     """Get Groq API key from environment"""
-    key = os.getenv('GROQ_API_KEY')
+    # Try different possible variable names
+    key = os.getenv('GROQ_API_KEY') or os.getenv('groq_api_key') or os.getenv('GROQ_KEY')
     if not key:
-        print("❌ GROQ_API_KEY not found! Get free key at console.groq.com")
+        # Debug: print available env vars that contain 'GROQ' or 'API'
+        groq_vars = [k for k in os.environ.keys() if 'GROQ' in k.upper() or 'groq' in k.lower()]
+        print(f"❌ GROQ_API_KEY not found! Available GROQ-related vars: {groq_vars}")
+        print("❌ Get free key at console.groq.com and set GROQ_API_KEY in Railway")
     return key
 
 # Validate key at startup
-_startup_key = os.getenv('GROQ_API_KEY')
+_startup_key = get_groq_key()
 if _startup_key:
     print(f"✅ Groq API key loaded: {_startup_key[:8]}...{_startup_key[-4:]}")
 else:
-    print("❌ WARNING: GROQ_API_KEY not set! Get free key at console.groq.com")
+    print("❌ WARNING: GROQ_API_KEY not set in Railway environment variables!")
 
 # In-memory session storage
 active_sessions = {}
