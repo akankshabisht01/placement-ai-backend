@@ -360,13 +360,13 @@ CURRENT STATE:
 
 CRITICAL RULES FOR RESPONSE HANDLING:
 1. If answer is OFF-TOPIC (weather, food, movies, jokes, unrelated topics):
-   → Say "Let's focus on the interview." then ask next question. NO praise.
+   → Say "Let's move on." then ask next question. NO praise.
 
 2. If answer is CASUAL/SOCIAL ("I'm good", "how are you", "what about you"):
    → Skip directly to next question. NO praise.
 
-3. If answer shows UNCERTAINTY ("I don't know", "not sure", "maybe"):
-   → Move on without praise. Ask an easier question.
+3. If answer shows UNCERTAINTY ("I don't know", "not sure", "can't answer"):
+   → Say "No problem, let's try another question." then ask EASIER question. NO judgment.
 
 4. If answer is RELEVANT but VAGUE (short, no examples):
    → No praise. Ask a follow-up or next question.
@@ -382,7 +382,8 @@ Never cut off mid-sentence.
 RESPONSE EXAMPLES:
 - Excellent answer: "Great point! [Next question]"
 - Good answer: "Nice! [Next question]"  
-- Off-topic answer: "Let's focus on the interview. [Next question]"
+- Off-topic answer: "Let's move on. [Next question]"
+- "I don't know" answer: "No problem. [Easier question]"
 - Vague/poor answer: "[Next question directly]"
 - Casual response: "[Next question directly]"
 """
@@ -502,6 +503,7 @@ def update_session_state(session, answer_analysis):
     quality_score = answer_analysis.get("quality_score", 1)
     is_off_topic = answer_analysis.get("is_off_topic", False)
     has_negative = answer_analysis.get("has_negative", False)
+    word_count = answer_analysis.get("word_count", 0)
     
     # Track quality score
     session.quality_scores.append(quality_score)
@@ -516,20 +518,32 @@ def update_session_state(session, answer_analysis):
     elif session.state == "interviewing":
         session.question_count += 1
         
-        # Only increase difficulty for truly good answers (quality_score >= 2)
-        if quality_score >= 2 and not is_off_topic:
+        # === PROGRESSIVE DIFFICULTY ADJUSTMENT ===
+        # Increase difficulty for good answers (quality_score >= 2 AND decent length)
+        if quality_score >= 2 and not is_off_topic and word_count >= 15:
             session.correct_answers += 1
-            # Increase difficulty after 2 good answers
-            if session.correct_answers % 2 == 0 and session.difficulty_level < 3:
-                session.difficulty_level += 1
-                print(f"⬆️ Difficulty increased to level {session.difficulty_level}")
+            print(f"✅ Good answer #{session.correct_answers} (quality={quality_score}, words={word_count})")
+            
+            # Increase difficulty every 2 good answers (faster progression)
+            if session.correct_answers >= 2 and session.difficulty_level < 3:
+                if session.correct_answers % 2 == 0:
+                    session.difficulty_level += 1
+                    print(f"⬆️ Difficulty increased to level {session.difficulty_level}/3")
         
-        # DECREASE difficulty if struggling (multiple poor answers)
+        # EXCELLENT answer (quality 3 with good length) - immediate difficulty increase
+        elif quality_score >= 3 and word_count >= 25:
+            session.correct_answers += 2  # Counts as 2 good answers
+            print(f"🌟 Excellent answer! (quality={quality_score}, words={word_count})")
+            if session.difficulty_level < 3:
+                session.difficulty_level += 1
+                print(f"⬆️ Difficulty increased to level {session.difficulty_level}/3 (excellent answer)")
+        
+        # DECREASE difficulty if struggling (multiple poor answers in a row)
         recent_scores = session.quality_scores[-3:] if len(session.quality_scores) >= 3 else session.quality_scores
         if len(recent_scores) >= 3 and all(s <= 1 for s in recent_scores):
             if session.difficulty_level > 1:
                 session.difficulty_level -= 1
-                print(f"⬇️ Difficulty decreased to level {session.difficulty_level}")
+                print(f"⬇️ Difficulty decreased to level {session.difficulty_level}/3 (struggling)")
         
         # Check if time to close
         if session.question_count >= session.total_questions:
@@ -1173,35 +1187,66 @@ def generate_interview_feedback(session):
     quality['substantive_answers'] = session.substantive_answers
     
     # Calculate average quality score from tracked scores
-    avg_quality_score = sum(session.quality_scores) / len(session.quality_scores) if session.quality_scores else 1
+    avg_quality_score = sum(session.quality_scores) / len(session.quality_scores) if session.quality_scores else 0
     
-    print(f"[Feedback] Total answers: {questions_answered}, Substantive: {substantive_count}, Avg quality: {avg_quality_score:.1f}")
+    # Count technical discussion (quality >= 2 means actual technical content)
+    technical_responses = sum(1 for s in session.quality_scores if s >= 2)
     
-    # Check for early termination
+    print(f"[Feedback] Duration: {duration_minutes:.1f}min, Total answers: {questions_answered}, Substantive: {substantive_count}, Technical: {technical_responses}, Avg quality: {avg_quality_score:.1f}")
+    
+    # === STRICT EARLY TERMINATION / NO EFFORT DETECTION ===
     early_termination = None
-    if questions_answered < 3:
+    max_score_cap = 100  # Default no cap
+    
+    # VERY early termination (< 2 min OR < 2 questions) - SEVERE penalty
+    if duration_minutes < 2 or questions_answered < 2:
+        early_termination = {
+            "detected": True,
+            "severity": "critical",
+            "message": "Interview ended extremely early. Unable to properly assess candidate.",
+            "penalty": 50
+        }
+        max_score_cap = 30  # Cap all scores at 30
+    
+    # Early termination (< 5 min OR < 4 questions)
+    elif duration_minutes < 5 or questions_answered < 4:
         early_termination = {
             "detected": True,
             "severity": "high",
-            "message": "Interview ended very early with fewer than 3 questions answered.",
-            "penalty": 30
+            "message": "Interview ended early with insufficient questions to assess skills.",
+            "penalty": 35
         }
-    elif questions_answered < 5 and duration_minutes < 3:
+        max_score_cap = 45  # Cap all scores at 45
+    
+    # Short interview (< 8 min OR < 6 questions)
+    elif duration_minutes < 8 or questions_answered < 6:
         early_termination = {
             "detected": True,
             "severity": "medium", 
-            "message": "Interview was shorter than typical. More questions could demonstrate skills better.",
-            "penalty": 15
+            "message": "Interview was shorter than recommended. More questions would better demonstrate skills.",
+            "penalty": 20
         }
+        max_score_cap = 65  # Cap all scores at 65
+    
+    # NO TECHNICAL DISCUSSION - user never gave technical answers
+    if technical_responses == 0 and questions_answered >= 2:
+        early_termination = {
+            "detected": True,
+            "severity": "critical",
+            "message": "No technical or substantive discussion occurred during the interview.",
+            "penalty": 45
+        }
+        max_score_cap = min(max_score_cap, 35)  # Cap at 35 if no technical
     
     # Check for mostly casual/off-topic responses
-    if substantive_count < questions_answered * 0.3:  # Less than 30% substantive
+    elif substantive_count < max(1, questions_answered * 0.3):  # Less than 30% substantive
         early_termination = {
             "detected": True,
             "severity": "high",
             "message": "Most responses were off-topic, casual, or lacked substance.",
-            "penalty": 35
+            "penalty": 40
         }
+        max_score_cap = min(max_score_cap, 40)
     
     # Try AI-powered analysis using GROQ (instead of Perplexity)
     ai_analysis = None
@@ -1311,46 +1356,83 @@ Respond ONLY with this JSON (no markdown, no explanation):
         for key in scores:
             scores[key] = max(0, min(100, int(scores[key])))
         
-        # Apply early termination penalty
+        # === APPLY MAXIMUM SCORE CAP (based on interview quality) ===
+        print(f"[Interview Feedback] Max score cap: {max_score_cap}")
+        for key in scores:
+            scores[key] = min(scores[key], max_score_cap)
+        
+        # Apply early termination penalty on top of cap
         if early_termination:
             penalty = early_termination['penalty']
+            print(f"[Interview Feedback] Applying early termination penalty: -{penalty}")
             for key in scores:
-                scores[key] = max(10, scores[key] - penalty)
+                scores[key] = max(5, scores[key] - penalty)
         
-        # Adjust based on response quality
-        if quality['avg_length'] < 10:
+        # === ADJUST BASED ON RESPONSE QUALITY ===
+        # Very short answers = low scores
+        if quality['avg_length'] < 8:
+            print(f"[Interview Feedback] Very short avg response ({quality['avg_length']} words) - capping at 35")
             for key in scores:
-                scores[key] = min(scores[key], 45)
-        elif quality['avg_length'] < 20:
+                scores[key] = min(scores[key], 35)
+        elif quality['avg_length'] < 15:
+            print(f"[Interview Feedback] Short avg response ({quality['avg_length']} words) - capping at 50")
             for key in scores:
-                scores[key] = min(scores[key], 65)
+                scores[key] = min(scores[key], 50)
+        elif quality['avg_length'] < 25:
+            print(f"[Interview Feedback] Moderate avg response ({quality['avg_length']} words) - capping at 70")
+            for key in scores:
+                scores[key] = min(scores[key], 70)
         
-        if quality['casual_count'] > 3:
+        # === SPECIFIC CATEGORY ADJUSTMENTS ===
+        # Technical knowledge based on actual technical content
+        if quality['technical_keywords'] < 2:
+            print(f"[Interview Feedback] Low technical keywords ({quality['technical_keywords']}) - capping technical_knowledge at 40")
+            scores['technical_knowledge'] = min(scores['technical_knowledge'], 40)
+        elif quality['technical_keywords'] < 5:
+            scores['technical_knowledge'] = min(scores['technical_knowledge'], 60)
+        
+        # Communication based on casual phrases
+        if quality['casual_count'] > 5:
+            scores['communication'] = min(scores['communication'], 40)
+            scores['professionalism'] = min(scores['professionalism'], 45)
+        elif quality['casual_count'] > 3:
+            scores['communication'] = min(scores['communication'], 55)
             scores['professionalism'] = min(scores['professionalism'], 55)
         
-        # CRITICAL: Penalize for inappropriate behavior
+        # === CRITICAL: Penalize for inappropriate behavior ===
         if session.abusive_count > 0:
-            print(f"[Interview Feedback] ABUSIVE behavior detected ({session.abusive_count}x) - capping professionalism at 20")
-            scores['professionalism'] = min(scores['professionalism'], 20)
-            scores['communication'] = min(scores['communication'], 35)
+            print(f"[Interview Feedback] ABUSIVE behavior detected ({session.abusive_count}x) - capping professionalism at 15")
+            scores['professionalism'] = min(scores['professionalism'], 15)
+            scores['communication'] = min(scores['communication'], 30)
+            scores['confidence'] = min(scores['confidence'], 35)
         
         if session.inappropriate_count > 2:
             print(f"[Interview Feedback] Multiple inappropriate responses ({session.inappropriate_count}) - reducing scores")
-            scores['communication'] = min(scores['communication'], 40)
-            scores['professionalism'] = min(scores['professionalism'], 40)
+            scores['communication'] = min(scores['communication'], 35)
+            scores['professionalism'] = min(scores['professionalism'], 35)
         
-        # CRITICAL: Cap scores if too few substantive answers
+        if session.off_topic_count > 3:
+            print(f"[Interview Feedback] Many off-topic responses ({session.off_topic_count}) - capping scores")
+            scores['communication'] = min(scores['communication'], 40)
+            scores['enthusiasm'] = min(scores['enthusiasm'], 40)
+        
+        # === CRITICAL: Cap scores based on substantive answer ratio ===
         total_responses = questions_answered if questions_answered > 0 else 1
         substantive_ratio = len(quality.get('substantive_answers', [])) / max(1, total_responses)
         print(f"[Interview Feedback] Substantive ratio: {substantive_ratio:.2f} ({len(quality.get('substantive_answers', []))}/{total_responses})")
         
-        if substantive_ratio < 0.3:
-            # Less than 30% good answers - cap all scores at 50
+        if substantive_ratio < 0.2:
+            # Less than 20% good answers - cap all scores at 35
+            print(f"[Interview Feedback] VERY LOW substantive ratio - capping all scores at 35")
+            for key in scores:
+                scores[key] = min(scores[key], 35)
+        elif substantive_ratio < 0.4:
+            # Less than 40% good answers - cap all scores at 50
             print(f"[Interview Feedback] LOW substantive ratio - capping all scores at 50")
             for key in scores:
                 scores[key] = min(scores[key], 50)
-        elif substantive_ratio < 0.5:
-            # Less than 50% good answers - cap all scores at 65
+        elif substantive_ratio < 0.6:
+            # Less than 60% good answers - cap all scores at 65
             print(f"[Interview Feedback] MEDIUM substantive ratio - capping all scores at 65")
             for key in scores:
                 scores[key] = min(scores[key], 65)
@@ -1375,30 +1457,51 @@ Respond ONLY with this JSON (no markdown, no explanation):
         
     else:
         # Fallback: generate basic scores from response quality metrics
-        base_score = 50
-        if quality['avg_length'] > 25:
+        # Start with base score based on overall engagement
+        base_score = 30  # Start lower - must earn points
+        
+        # Add points for response length
+        if quality['avg_length'] >= 30:
+            base_score += 25
+        elif quality['avg_length'] >= 20:
             base_score += 15
-        elif quality['avg_length'] > 15:
+        elif quality['avg_length'] >= 12:
             base_score += 8
         elif quality['avg_length'] < 8:
-            base_score -= 15
+            base_score -= 10  # Very short answers = penalty
         
-        tech_bonus = min(20, quality['technical_keywords'] * 3)
-        casual_penalty = min(15, quality['casual_count'] * 5)
+        # Add points for technical content
+        tech_bonus = min(25, quality['technical_keywords'] * 4)
+        
+        # Penalty for casual/unprofessional language
+        casual_penalty = min(20, quality['casual_count'] * 6)
+        
+        # Bonus for completing more questions
+        completion_bonus = min(15, questions_answered * 2)
         
         scores = {
-            'technical_knowledge': max(15, min(85, base_score + tech_bonus - 5)),
-            'communication': max(15, min(85, base_score + 5 - casual_penalty)),
-            'problem_solving': max(15, min(85, base_score - 5 + tech_bonus // 2)),
-            'professionalism': max(15, min(85, base_score - casual_penalty)),
-            'enthusiasm': max(15, min(85, base_score + 5)),
-            'confidence': max(15, min(85, base_score))
+            'technical_knowledge': max(10, min(max_score_cap, base_score + tech_bonus)),
+            'communication': max(10, min(max_score_cap, base_score + 5 - casual_penalty)),
+            'problem_solving': max(10, min(max_score_cap, base_score - 5 + tech_bonus // 2)),
+            'professionalism': max(10, min(max_score_cap, base_score - casual_penalty)),
+            'enthusiasm': max(10, min(max_score_cap, base_score + completion_bonus // 2)),
+            'confidence': max(10, min(max_score_cap, base_score))
         }
         
+        # Apply early termination penalty
         if early_termination:
             penalty = early_termination['penalty']
+            print(f"[Interview Feedback] Fallback - applying penalty: -{penalty}")
             for key in scores:
-                scores[key] = max(10, scores[key] - penalty)
+                scores[key] = max(5, scores[key] - penalty)
+        
+        # Apply max cap
+        for key in scores:
+            scores[key] = min(scores[key], max_score_cap)
+        
+        # If no technical keywords, cap technical knowledge very low
+        if quality['technical_keywords'] == 0:
+            scores['technical_knowledge'] = min(scores['technical_knowledge'], 30)
         
         overall_score = _calculate_weighted_score(scores)
         performance_level = _get_performance_level(overall_score)
