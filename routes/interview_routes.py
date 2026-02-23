@@ -216,26 +216,35 @@ class InterviewSession:
         ]
         
         # === Non-English Detection (Hindi/other languages) ===
+        # Split message into actual words for proper matching
+        msg_words = set(re.findall(r'\b[a-z]+\b', msg_lower))
+        
         # Check for non-ASCII characters that indicate non-English text
-        non_english_indicators = [
-            # Hindi/Devanagari Unicode range
-            any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message),
-            # Arabic
-            any(ord(c) >= 0x0600 and ord(c) <= 0x06FF for c in message),
-            # Chinese
-            any(ord(c) >= 0x4E00 and ord(c) <= 0x9FFF for c in message),
-            # Common Hindi romanized words (expanded list)
-            any(word in msg_lower for word in [
-                'kya', 'kaise', 'hai', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi', 
-                'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'kitna', 'accha', 'theek',
-                'teri', 'tera', 'tere', 'meri', 'mera', 'mere', 'bahut', 'gaya', 'gayi', 'gaye',
-                'maru', 'maro', 'masti', 'bhaiya', 'bhai', 'didi', 'behen', 'abhi', 'kaha',
-                'raha', 'rahi', 'rahe', 'kar', 'karna', 'karta', 'karti', 'acha', 'aur',
-                'lekin', 'matlab', 'samajh', 'dekh', 'dekho', 'suno', 'bata', 'batao',
-                'jao', 'aao', 'chalo', 'chal', 'ruk', 'ruko', 'bol', 'bolna', 'bolta'
-            ])
-        ]
-        is_non_english = any(non_english_indicators)
+        has_devanagari = any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message)
+        has_arabic = any(ord(c) >= 0x0600 and ord(c) <= 0x06FF for c in message)
+        has_chinese = any(ord(c) >= 0x4E00 and ord(c) <= 0x9FFF for c in message)
+        
+        # Common Hindi romanized words - only match FULL WORDS (not substrings)
+        hindi_romanized = {
+            'kya', 'kaise', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi', 
+            'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'kitna', 'accha', 'theek',
+            'teri', 'tera', 'tere', 'meri', 'mera', 'bahut', 'gaya', 'gayi', 'gaye',
+            'maru', 'maro', 'masti', 'bhaiya', 'bhai', 'didi', 'behen', 'abhi', 'kaha',
+            'raha', 'rahi', 'rahe', 'karna', 'karta', 'karti', 'acha', 
+            'lekin', 'matlab', 'samajh', 'dekh', 'dekho', 'suno', 'bata', 'batao',
+            'jao', 'aao', 'chalo', 'ruko', 'bolna', 'bolta', 'nhi', 'kro', 'krna',
+            'btao', 'bolo', 'sunna', 'bolte', 'karte', 'krte'
+        }
+        # Removed short words that cause false positives: 'hai', 'kar', 'aur', 'mere', 'bol', 'chal', 'ruk'
+        
+        # Count how many Hindi words appear as FULL WORDS in message
+        hindi_word_matches = msg_words.intersection(hindi_romanized)
+        
+        # Only flag as non-English if: non-Latin script OR multiple (2+) Hindi words found
+        is_non_english = has_devanagari or has_arabic or has_chinese or len(hindi_word_matches) >= 2
+        
+        if is_non_english and hindi_word_matches:
+            print(f"[Non-English] Detected Hindi words: {hindi_word_matches}")
         
         # Check for abusive language
         is_abusive = any(phrase in msg_lower for phrase in abusive_phrases)
