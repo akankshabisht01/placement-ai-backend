@@ -182,6 +182,33 @@ class InterviewSession:
             "i love you", "that's funny", "lol", "haha", "lmao"
         ]
         
+        # === Abusive/Inappropriate Language Detection ===
+        abusive_phrases = [
+            "fuck", "shit", "damn", "ass", "bitch", "bastard", "crap",
+            "idiot", "stupid", "dumb", "hate you", "shut up", "go away",
+            "f**k", "f***", "s**t", "a**", "b**ch", "wtf", "stfu",
+            "screw you", "piss off", "get lost", "you suck", "loser",
+            "madarchod", "bhenchod", "chutiya", "gandu", "harami", "sala",
+            "behenchod", "mc", "bc", "gaand", "lund", "chut"
+        ]
+        
+        # === Non-English Detection (Hindi/other languages) ===
+        # Check for non-ASCII characters that indicate non-English text
+        non_english_indicators = [
+            # Hindi/Devanagari Unicode range
+            any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message_text),
+            # Arabic
+            any(ord(c) >= 0x0600 and ord(c) <= 0x06FF for c in message_text),
+            # Chinese
+            any(ord(c) >= 0x4E00 and ord(c) <= 0x9FFF for c in message_text),
+            # Common Hindi romanized words
+            any(word in msg_lower for word in ['kya', 'kaise', 'hai', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi', 'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'kitna', 'accha', 'theek'])
+        ]
+        is_non_english = any(non_english_indicators)
+        
+        # Check for abusive language
+        is_abusive = any(phrase in msg_lower for phrase in abusive_phrases)
+        
         # === Negative/Uncertain Indicators ===
         negative_phrases = [
             "i don't know", "i dont know", "not sure", "no idea", "can't answer",
@@ -212,7 +239,7 @@ class InterviewSession:
         
         # === Analysis ===
         is_casual = any(phrase in msg_lower for phrase in casual_phrases) and word_count < 12
-        is_off_topic = any(phrase in msg_lower for phrase in off_topic_phrases)
+        is_off_topic = any(phrase in msg_lower for phrase in off_topic_phrases) or is_non_english
         has_negative = any(phrase in msg_lower for phrase in negative_phrases)
         has_positive = any(phrase in msg_lower for phrase in positive_indicators)
         tech_count = sum(1 for kw in technical_keywords if kw in msg_lower)
@@ -267,9 +294,16 @@ class InterviewSession:
         
         has_substance = quality_score >= 2
         
+        # Abusive or non-English = quality 0
+        if is_abusive or is_non_english:
+            quality_score = 0
+            has_substance = False
+        
         return {
             "is_casual": is_casual,
             "is_off_topic": is_off_topic,
+            "is_abusive": is_abusive,
+            "is_non_english": is_non_english,
             "has_substance": has_substance,
             "quality_score": quality_score,
             "is_relevant": is_relevant,
@@ -329,25 +363,50 @@ def get_instruction_for_state(session, user_message, answer_analysis):
     is_casual = answer_analysis["is_casual"]
     is_off_topic = answer_analysis.get("is_off_topic", False)
     quality_score = answer_analysis.get("quality_score", 1)
+    word_count = answer_analysis.get("word_count", 0)
     elapsed_minutes = session.get_elapsed_minutes()
+    
+    # Build EXPLICIT analysis summary for AI
+    user_said_summary = f"USER SAID: \"{user_message[:100]}...\"" if len(user_message) > 100 else f"USER SAID: \"{user_message}\""
+    analysis_note = f"ANALYSIS: quality={quality_score}/3, words={word_count}, "
+    if is_off_topic:
+        analysis_note += "OFF-TOPIC (weather/food/unrelated), "
+    if is_casual:
+        analysis_note += "CASUAL/SOCIAL (not interview answer), "
+    if quality_score == 0:
+        analysis_note += "POOR/IRRELEVANT. "
+    elif quality_score == 1:
+        analysis_note += "VAGUE/BRIEF. "
+    elif quality_score == 2:
+        analysis_note += "DECENT. "
+    else:
+        analysis_note += "EXCELLENT. "
     
     # Handle off-topic responses in any state
     if is_off_topic:
         question_topic = session.get_next_question_topic()
-        return f"Say 'Let's focus on the interview.' then ask about {question_topic}. Under 30 words total."
+        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Let's stay focused on the interview.' then ask about {question_topic}. NO thanks, NO praise. Under 30 words."
     
     if session.state == "greeting":
-        if is_casual:
-            return f"Skip appreciation. Ask them to introduce themselves and their interest in the {session.position} role. Under 25 words."
-        return f"Briefly acknowledge, then ask them to tell you about themselves and why they're interested in {session.position}. Under 25 words."
+        # Check if this was actually a greeting or casual chat
+        if is_casual or word_count < 5:
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Skip any thanks. Ask them to introduce themselves and tell you about their interest in {session.position}. Under 25 words."
+        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Brief acknowledgment (1-2 words), then ask them to tell you about themselves and why they're interested in {session.position}. Under 25 words."
     
     elif session.state == "introduction":
         question_topic = session.get_next_question_topic()
         session.last_question_topic = question_topic  # Track for relevance checking
-        if quality_score >= 2:
-            return f"Say 'Thanks!' briefly, then ask about {question_topic}. Under 30 words."
+        
+        # Check if they actually introduced themselves
+        intro_keywords = ['name is', 'i am', "i'm a", 'my background', 'i have experience', 'i graduated', 'i work', 'i studied', 'years of']
+        has_intro_content = any(kw in user_message.lower() for kw in intro_keywords)
+        
+        if quality_score >= 2 and has_intro_content:
+            return f"{user_said_summary}\\n{analysis_note}User gave a proper introduction.\\nRESPOND: Say 'Thanks for the introduction!' then ask about {question_topic}. Under 30 words."
+        elif is_casual or not has_intro_content:
+            return f"{user_said_summary}\\n{analysis_note}User did NOT actually introduce themselves.\\nRESPOND: Say 'I'd like to know more about you.' then ask about their background/experience with {session.position}. NO thanks. Under 30 words."
         else:
-            return f"Ask about {question_topic} directly without praise. Under 25 words."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Ask about {question_topic} directly without thanks. Under 25 words."
     
     elif session.state == "interviewing":
         # TIME-BASED scenario trigger (after 20 minutes) OR count-based (last 2 questions)
@@ -357,32 +416,46 @@ def get_instruction_for_state(session, user_message, answer_analysis):
             scenario_topic = session.get_scenario_topic()
             session.last_question_topic = scenario_topic
             if quality_score >= 2:
-                return f"Say 'Good!' then present this scenario: {scenario_topic}. Under 45 words total."
+                return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Good!' then present this scenario: {scenario_topic}. Under 45 words total."
             else:
-                return f"Present this scenario directly: {scenario_topic}. Under 40 words."
+                return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Present this scenario directly: {scenario_topic}. NO praise. Under 40 words."
         
         # Check if time to close
         if session.question_count >= session.total_questions:
-            return "Thank them warmly and ask if they have any questions for you. Under 20 words."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Thank them warmly and ask if they have any questions for you. Under 20 words."
         
         # Get next question based on difficulty
         question_topic = session.get_next_question_topic()
         session.last_question_topic = question_topic  # Track for relevance checking
         
-        # Quality-aware response
+        # Quality-aware response - BE EXPLICIT about what to do
         if quality_score >= 3:
-            return f"Say 'Excellent!' then ask a harder question about {question_topic}. Under 30 words total."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Excellent!' then ask a harder question about {question_topic}. Under 30 words total."
         elif quality_score == 2:
-            return f"Say 'Good!' (1 word), then ask about {question_topic}. Under 30 words total."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Good!' (1 word only), then ask about {question_topic}. Under 30 words total."
         elif is_casual:
-            return f"Ask about {question_topic} directly without any acknowledgment. Under 25 words."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Ask about {question_topic} directly. NO acknowledgment, NO thanks. Under 25 words."
         else:
-            return f"Ask about {question_topic} directly without praise. Under 25 words."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Ask about {question_topic} directly. NO thanks, no praise. Under 25 words."
     
     elif session.state == "closing":
-        return "Give a warm closing, thank them for their time, wish them luck. Under 20 words."
+        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Give a warm closing, thank them for their time, wish them luck. Under 20 words."
     
     return "Respond naturally and professionally as Alex the interviewer."
+
+
+def get_direct_question(session):
+    """Get a direct question without calling AI - for handling inappropriate responses"""
+    if session.state == "greeting":
+        return f"Could you please introduce yourself and tell me about your interest in the {session.position} role?"
+    elif session.state == "introduction":
+        topic = session.get_next_question_topic()
+        return f"Tell me about your experience with {topic}."
+    elif session.state == "interviewing":
+        topic = session.get_next_question_topic()
+        return f"Let's continue. Can you tell me about {topic}?"
+    else:
+        return "Let's continue with the interview. What questions do you have for me?"
 
 
 def update_session_state(session, answer_analysis):
@@ -498,7 +571,66 @@ def process_response():
         print(f"📊 Answer Analysis: quality={answer_analysis['quality_score']}, "
               f"off_topic={answer_analysis['is_off_topic']}, "
               f"casual={answer_analysis['is_casual']}, "
+              f"abusive={answer_analysis.get('is_abusive', False)}, "
+              f"non_english={answer_analysis.get('is_non_english', False)}, "
               f"tech_count={answer_analysis['tech_count']}")
+        
+        # === DIRECT HANDLING: Abusive language - don't even call AI ===
+        if answer_analysis.get('is_abusive', False):
+            warning_response = "Please maintain professional language during this interview. Let's continue. " + get_direct_question(interview_session)
+            interview_session.conversation_history.append({"role": "user", "content": user_message})
+            interview_session.conversation_history.append({"role": "assistant", "content": warning_response})
+            interview_session.answers.append(user_message)
+            interview_session.quality_scores.append(0)
+            update_session_state(interview_session, answer_analysis)
+            
+            return jsonify({
+                "success": True,
+                "message": warning_response,
+                "state": interview_session.state,
+                "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
+                "should_speak": True,
+                "was_inappropriate": True
+            })
+        
+        # === DIRECT HANDLING: Non-English response ===
+        if answer_analysis.get('is_non_english', False):
+            english_response = "Please respond in English for this interview. " + get_direct_question(interview_session)
+            interview_session.conversation_history.append({"role": "user", "content": user_message})
+            interview_session.conversation_history.append({"role": "assistant", "content": english_response})
+            interview_session.answers.append(user_message)
+            interview_session.quality_scores.append(0)
+            update_session_state(interview_session, answer_analysis)
+            
+            return jsonify({
+                "success": True,
+                "message": english_response,
+                "state": interview_session.state,
+                "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
+                "should_speak": True,
+                "was_non_english": True
+            })
+        
+        # === DIRECT HANDLING: Clearly off-topic (weather, movies, jokes, etc.) ===
+        if answer_analysis.get('is_off_topic', False):
+            offtopic_response = "Let's stay focused on the interview. " + get_direct_question(interview_session)
+            interview_session.conversation_history.append({"role": "user", "content": user_message})
+            interview_session.conversation_history.append({"role": "assistant", "content": offtopic_response})
+            interview_session.answers.append(user_message)
+            interview_session.quality_scores.append(0)
+            update_session_state(interview_session, answer_analysis)
+            
+            return jsonify({
+                "success": True,
+                "message": offtopic_response,
+                "state": interview_session.state,
+                "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
+                "should_speak": True,
+                "was_off_topic": True
+            })
         
         # Add user message to history
         interview_session.conversation_history.append({
