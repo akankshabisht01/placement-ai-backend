@@ -953,6 +953,7 @@ def end_interview():
     try:
         data = request.get_json()
         session_id = data.get('session_id')
+        confidence_analysis = data.get('confidence_analysis')  # Client-side MediaPipe results
         
         if session_id not in active_sessions:
             return jsonify({
@@ -965,6 +966,18 @@ def end_interview():
         # Generate feedback
         feedback = generate_interview_feedback(interview_session)
         
+        # Add confidence analysis to feedback if available
+        if confidence_analysis and confidence_analysis.get('framesAnalyzed', 0) > 0:
+            feedback['confidence_analysis'] = {
+                'eye_contact_score': confidence_analysis.get('avgEyeContact', 0),
+                'head_stability_score': confidence_analysis.get('avgHeadStability', 0),
+                'overall_confidence_score': confidence_analysis.get('avgOverall', 0),
+                'confidence_level': confidence_analysis.get('level', 'Unknown'),
+                'frames_analyzed': confidence_analysis.get('framesAnalyzed', 0),
+                'analysis_duration_seconds': confidence_analysis.get('duration', 0)
+            }
+            print(f"📹 Confidence analysis saved: Eye={confidence_analysis.get('avgEyeContact')}%, Stability={confidence_analysis.get('avgHeadStability')}%, Overall={confidence_analysis.get('avgOverall')}%")
+        
         # Save to database
         db = get_db()
         interview_data = {
@@ -973,6 +986,10 @@ def end_interview():
             "feedback": feedback,
             "status": "completed"
         }
+        
+        # Also store confidence analysis at top level for easy querying
+        if confidence_analysis and confidence_analysis.get('framesAnalyzed', 0) > 0:
+            interview_data['confidence_analysis'] = feedback['confidence_analysis']
         
         result = db.interviews.insert_one(interview_data)
         interview_id = str(result.inserted_id)
