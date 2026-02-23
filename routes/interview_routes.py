@@ -70,6 +70,11 @@ class InterviewSession:
         self.total_questions = 8
         self.interview_duration_minutes = 30  # Total interview time
         self.scenario_time_threshold = 20  # Start scenarios after 20 minutes
+        # Follow-up tracking for professional conversation flow
+        self.last_answer_was_vague = False  # Track if we need to follow up
+        self.follow_up_asked = False  # Prevent multiple follow-ups on same topic
+        self.last_good_answer_topic = None  # Track for referencing in later questions
+        self.praise_index = 0  # Rotate through praise phrases
     
     def to_dict(self):
         return {
@@ -353,48 +358,97 @@ class InterviewSession:
         }
 
 
+# Response variety lists for natural conversation
+PRAISE_PHRASES = [
+    "Good point!", "Nice!", "That's helpful.", "Good insight.", 
+    "I see.", "Interesting.", "Makes sense.", "That's useful.",
+    "Good example!", "Thanks for sharing that."
+]
+
+EXCELLENT_PHRASES = [
+    "Excellent!", "Great answer!", "Very impressive!", "That's exactly what I was looking for.",
+    "Great example!", "Well explained!", "That shows strong experience."
+]
+
+ACKNOWLEDGMENT_PHRASES = [
+    "I understand.", "Got it.", "Okay.", "I see.", "Alright."
+]
+
+FOLLOW_UP_PROMPTS = [
+    "Can you give me a specific example?",
+    "Could you elaborate on that?",
+    "What was the outcome?",
+    "Can you walk me through your approach?",
+    "What was your specific role in that?"
+]
+
 def get_smart_system_prompt(session):
     """Generate intelligent system prompt like Groq engine"""
     difficulty_desc = {1: "basic/entry-level", 2: "intermediate", 3: "advanced/senior-level"}.get(session.difficulty_level, "intermediate")
     already_asked = ", ".join(session.asked_topics[-5:]) if session.asked_topics else "none yet"
     elapsed_minutes = session.get_elapsed_minutes()
+    remaining_questions = session.total_questions - session.question_count
     
-    return f"""You are Alex, a professional AI interviewer for the {session.position} position.
+    # Get varied phrases for this response
+    praise_phrase = PRAISE_PHRASES[session.praise_index % len(PRAISE_PHRASES)]
+    excellent_phrase = EXCELLENT_PHRASES[session.praise_index % len(EXCELLENT_PHRASES)]
+    
+    # Time awareness
+    time_context = ""
+    if remaining_questions <= 2:
+        time_context = "\n- WRAPPING UP: Only 1-2 questions left. Consider asking about final thoughts."
+    
+    return f"""You are Alex, a professional and friendly AI interviewer for the {session.position} position.
 
 CURRENT STATE:
 - Difficulty Level: {session.difficulty_level}/3 ({difficulty_desc})
 - Question #{session.question_count + 1} of {session.total_questions}
 - Time elapsed: {elapsed_minutes:.1f} minutes
-- Already asked about: {already_asked}
+- Already asked about: {already_asked}{time_context}
 
 CRITICAL RULES FOR RESPONSE HANDLING:
-1. If answer is OFF-TOPIC (weather, food, movies, jokes, unrelated topics):
-   → Say "Let's move on." then ask next question. NO praise.
 
-2. If answer is CASUAL/SOCIAL ("I'm good", "how are you", "what about you"):
-   → Skip directly to next question. NO praise.
+1. OFF-TOPIC (weather, food, movies, jokes, unrelated):
+   → Say "Let's get back to the interview." + ask next question. NO praise.
 
-3. If answer shows UNCERTAINTY ("I don't know", "not sure", "can't answer"):
-   → Say "No problem, let's try another question." then ask EASIER question. NO judgment.
+2. CASUAL GREETING ("I'm good", "how are you", "what about you"):
+   → Say "Good to hear!" briefly, then redirect to interview question.
 
-4. If answer is RELEVANT but VAGUE (short, no examples):
-   → No praise. Ask a follow-up or next question.
+3. "I DON'T KNOW" / UNCERTAIN ("not sure", "can't answer", "no idea"):
+   → Say "That's okay, let's try something else." + ask EASIER question. Be supportive.
 
-5. If answer is RELEVANT with SUBSTANCE (specific examples, technical details):
-   → Brief praise (1-2 words: "Good!" or "Nice!") then next question.
+4. VAGUE BUT RELEVANT (short answer, no examples, no specifics):
+   → Ask a FOLLOW-UP: "Can you give me a specific example?" or "Could you elaborate?"
+   → Only ask ONE follow-up, then move to next topic if still vague.
+
+5. GOOD ANSWER (relevant with some detail):
+   → Use VARIED praise: "{praise_phrase}" then ask next question.
+
+6. EXCELLENT ANSWER (specific examples, technical details, STAR format):
+   → Say "{excellent_phrase}" and reference their answer when asking harder question.
+   → Example: "Great example of problem-solving. Building on that, how would you handle..."
+
+7. BEHAVIORAL QUESTIONS - Use STAR prompting:
+   → If answer lacks specifics, ask: "What was YOUR specific role?" or "What was the outcome?"
+
+CONVERSATION STYLE:
+- Vary your acknowledgments: "I see", "Got it", "Interesting", "Makes sense"
+- Connect questions when possible: "You mentioned X earlier, how does that relate to..."
+- Be encouraging but not over-praising
+- Sound natural, not robotic
 
 NEVER repeat a question you already asked (check "Already asked about" list).
 Ask {difficulty_desc} questions appropriate for current level.
-Keep response under 35 words total.
+Keep response under 40 words total.
 Never cut off mid-sentence.
 
 RESPONSE EXAMPLES:
-- Excellent answer: "Great point! [Next question]"
-- Good answer: "Nice! [Next question]"  
-- Off-topic answer: "Let's move on. [Next question]"
-- "I don't know" answer: "No problem. [Easier question]"
-- Vague/poor answer: "[Next question directly]"
-- Casual response: "[Next question directly]"
+- Excellent: "{excellent_phrase} Building on that, [harder question]"
+- Good: "{praise_phrase} [Next question]"
+- Vague: "Can you give me a specific example of that?"
+- Off-topic: "Let's get back to the interview. [Next question]"
+- "I don't know": "That's okay. [Easier question]"
+- Casual: "Good to hear! [Redirect to question]"
 """
 
 
@@ -403,9 +457,20 @@ def get_instruction_for_state(session, user_message, answer_analysis):
     has_substance = answer_analysis["has_substance"]
     is_casual = answer_analysis["is_casual"]
     is_off_topic = answer_analysis.get("is_off_topic", False)
+    has_negative = answer_analysis.get("has_negative", False)
     quality_score = answer_analysis.get("quality_score", 1)
     word_count = answer_analysis.get("word_count", 0)
     elapsed_minutes = session.get_elapsed_minutes()
+    remaining_questions = session.total_questions - session.question_count
+    
+    # Get varied phrases
+    praise = PRAISE_PHRASES[session.praise_index % len(PRAISE_PHRASES)]
+    excellent = EXCELLENT_PHRASES[session.praise_index % len(EXCELLENT_PHRASES)]
+    ack = ACKNOWLEDGMENT_PHRASES[session.praise_index % len(ACKNOWLEDGMENT_PHRASES)]
+    follow_up = FOLLOW_UP_PROMPTS[session.praise_index % len(FOLLOW_UP_PROMPTS)]
+    
+    # Increment praise index for variety
+    session.praise_index += 1
     
     # Build EXPLICIT analysis summary for AI
     user_said_summary = f"USER SAID: \"{user_message[:100]}...\"" if len(user_message) > 100 else f"USER SAID: \"{user_message}\""
@@ -414,40 +479,56 @@ def get_instruction_for_state(session, user_message, answer_analysis):
         analysis_note += "OFF-TOPIC (weather/food/unrelated), "
     if is_casual:
         analysis_note += "CASUAL/SOCIAL (not interview answer), "
+    if has_negative:
+        analysis_note += "SHOWS UNCERTAINTY, "
     if quality_score == 0:
         analysis_note += "POOR/IRRELEVANT. "
     elif quality_score == 1:
-        analysis_note += "VAGUE/BRIEF. "
+        analysis_note += "VAGUE/BRIEF - needs follow-up. "
     elif quality_score == 2:
-        analysis_note += "DECENT. "
+        analysis_note += "DECENT - good answer. "
     else:
-        analysis_note += "EXCELLENT. "
+        analysis_note += "EXCELLENT - great detail! "
+    
+    # Track if this answer was vague for follow-up logic
+    is_vague = quality_score == 1 and not is_off_topic and not is_casual and word_count >= 5
+    
+    # Handle "I don't know" / uncertainty - be supportive
+    if has_negative and ("don't know" in user_message.lower() or "not sure" in user_message.lower() or "no idea" in user_message.lower()):
+        question_topic = session.get_next_question_topic()
+        session.last_question_topic = question_topic
+        # Decrease difficulty for easier question
+        if session.difficulty_level > 1:
+            session.difficulty_level -= 1
+        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say \"That's okay, let's try something else.\" then ask an EASIER question about {question_topic}. Be supportive. Under 30 words."
     
     # Handle off-topic responses in any state
     if is_off_topic:
         question_topic = session.get_next_question_topic()
-        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Let's stay focused on the interview.' then ask about {question_topic}. NO thanks, NO praise. Under 30 words."
+        session.last_question_topic = question_topic
+        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Let's get back to the interview.' then ask about {question_topic}. NO praise. Under 30 words."
     
     if session.state == "greeting":
         # Check if this was actually a greeting or casual chat
         if is_casual or word_count < 5:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Skip any thanks. Ask them to introduce themselves and tell you about their interest in {session.position}. Under 25 words."
-        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Brief acknowledgment (1-2 words), then ask them to tell you about themselves and why they're interested in {session.position}. Under 25 words."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Good to hear!' then ask them to introduce themselves and share their interest in {session.position}. Under 30 words."
+        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{ack}' then ask them to tell you about themselves and why they're interested in {session.position}. Under 30 words."
     
     elif session.state == "introduction":
         question_topic = session.get_next_question_topic()
         session.last_question_topic = question_topic  # Track for relevance checking
         
         # Check if they actually introduced themselves
-        intro_keywords = ['name is', 'i am', "i'm a", 'my background', 'i have experience', 'i graduated', 'i work', 'i studied', 'years of']
+        intro_keywords = ['name is', 'i am', "i'm a", 'my background', 'i have experience', 'i graduated', 'i work', 'i studied', 'years of', 'pursuing', 'studying', 'student', 'engineering', 'degree']
         has_intro_content = any(kw in user_message.lower() for kw in intro_keywords)
         
         if quality_score >= 2 and has_intro_content:
-            return f"{user_said_summary}\\n{analysis_note}User gave a proper introduction.\\nRESPOND: Say 'Thanks for the introduction!' then ask about {question_topic}. Under 30 words."
+            session.last_good_answer_topic = "their background"
+            return f"{user_said_summary}\\n{analysis_note}User gave a proper introduction.\\nRESPOND: Say 'Thanks for sharing that!' then ask about {question_topic}. Under 30 words."
         elif is_casual or not has_intro_content:
-            return f"{user_said_summary}\\n{analysis_note}User did NOT actually introduce themselves.\\nRESPOND: Say 'I'd like to know more about you.' then ask about their background/experience with {session.position}. NO thanks. Under 30 words."
+            return f"{user_said_summary}\\n{analysis_note}User did NOT actually introduce themselves.\\nRESPOND: Say 'I'd like to know more about you.' then ask about their background and experience relevant to {session.position}. Under 30 words."
         else:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Ask about {question_topic} directly without thanks. Under 25 words."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{ack}' and ask about {question_topic}. Under 30 words."
     
     elif session.state == "interviewing":
         # TIME-BASED scenario trigger (after 20 minutes) OR count-based (last 2 questions)
@@ -457,30 +538,58 @@ def get_instruction_for_state(session, user_message, answer_analysis):
             scenario_topic = session.get_scenario_topic()
             session.last_question_topic = scenario_topic
             if quality_score >= 2:
-                return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Good!' then present this scenario: {scenario_topic}. Under 45 words total."
+                return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{praise}' then present this scenario: {scenario_topic}. Under 45 words total."
             else:
                 return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Present this scenario directly: {scenario_topic}. NO praise. Under 40 words."
         
-        # Check if time to close
+        # Check if time to close / wrapping up
         if session.question_count >= session.total_questions:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Thank them warmly and ask if they have any questions for you. Under 20 words."
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Thank them warmly for the conversation and ask if they have any questions for you. Under 25 words."
+        
+        # WRAPPING UP - last 1-2 questions
+        if remaining_questions <= 2 and quality_score >= 2:
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{praise}' then say 'We're wrapping up. Any final thoughts on why you'd be a great fit for this {session.position} role?' Under 35 words."
+        
+        # === FOLLOW-UP LOGIC for vague answers ===
+        # If answer was vague and we haven't asked follow-up yet, probe deeper
+        if is_vague and not session.follow_up_asked and session.last_question_topic:
+            session.follow_up_asked = True
+            session.last_answer_was_vague = True
+            # Use STAR prompting for behavioral questions
+            if any(word in session.last_question_topic.lower() for word in ['challenge', 'problem', 'conflict', 'difficult', 'team', 'project']):
+                return f"{user_said_summary}\\n{analysis_note}Answer is vague - use STAR prompting.\\nRESPOND: Ask '{follow_up}' to get more specifics. Under 20 words."
+            else:
+                return f"{user_said_summary}\\n{analysis_note}Answer is vague - ask for elaboration.\\nRESPOND: Say 'Can you give me a specific example?' Under 15 words."
+        
+        # Reset follow-up tracking when moving to new topic
+        session.follow_up_asked = False
+        session.last_answer_was_vague = False
         
         # Get next question based on difficulty
         question_topic = session.get_next_question_topic()
         session.last_question_topic = question_topic  # Track for relevance checking
         
-        # Quality-aware response - BE EXPLICIT about what to do
+        # Quality-aware response with VARIETY
         if quality_score >= 3:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Excellent!' then ask a harder question about {question_topic}. Under 30 words total."
+            session.last_good_answer_topic = question_topic
+            # Reference their excellent answer
+            return f"{user_said_summary}\\n{analysis_note}EXCELLENT answer!\\nRESPOND: Say '{excellent}' and connect to next question: 'Building on that, {question_topic}?' Under 35 words."
         elif quality_score == 2:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Good!' (1 word only), then ask about {question_topic}. Under 30 words total."
+            session.last_good_answer_topic = question_topic
+            return f"{user_said_summary}\\n{analysis_note}Good answer.\\nRESPOND: Say '{praise}' then ask about {question_topic}. Under 30 words."
         elif is_casual:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Ask about {question_topic} directly. NO acknowledgment, NO thanks. Under 25 words."
+            return f"{user_said_summary}\\n{analysis_note}Casual response.\\nRESPOND: Say 'Good to hear!' then ask about {question_topic}. Under 30 words."
         else:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Ask about {question_topic} directly. NO thanks, no praise. Under 25 words."
+            # Poor/vague answer after follow-up - just move on
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{ack}' and ask about {question_topic}. Under 30 words."
     
     elif session.state == "closing":
-        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Give a warm closing, thank them for their time, wish them luck. Under 20 words."
+        # Personalized closing based on interview quality
+        avg_score = sum(session.quality_scores) / len(session.quality_scores) if session.quality_scores else 1
+        if avg_score >= 2:
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Give a warm, positive closing. Say you enjoyed the conversation and wish them the best. Under 25 words."
+        else:
+            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Give a professional closing. Thank them for their time and wish them luck. Under 20 words."
     
     return "Respond naturally and professionally as Alex the interviewer."
 
