@@ -196,11 +196,11 @@ class InterviewSession:
         # Check for non-ASCII characters that indicate non-English text
         non_english_indicators = [
             # Hindi/Devanagari Unicode range
-            any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message_text),
+            any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message),
             # Arabic
-            any(ord(c) >= 0x0600 and ord(c) <= 0x06FF for c in message_text),
+            any(ord(c) >= 0x0600 and ord(c) <= 0x06FF for c in message),
             # Chinese
-            any(ord(c) >= 0x4E00 and ord(c) <= 0x9FFF for c in message_text),
+            any(ord(c) >= 0x4E00 and ord(c) <= 0x9FFF for c in message),
             # Common Hindi romanized words
             any(word in msg_lower for word in ['kya', 'kaise', 'hai', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi', 'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'kitna', 'accha', 'theek'])
         ]
