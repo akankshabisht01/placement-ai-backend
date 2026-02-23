@@ -188,6 +188,22 @@ class InterviewSession:
             "nice to meet", "pleasure to meet", "thank you for asking"
         ]
         
+        # === Clarification Requests (user didn't understand the question) ===
+        clarification_phrases = [
+            "what do you mean", "what are you trying to say", "what trying to say",
+            "i don't understand", "i dont understand", "don't understand",
+            "can you explain", "could you explain", "please explain",
+            "can you rephrase", "could you rephrase", "rephrase that",
+            "what does that mean", "what's that mean", "what is that",
+            "come again", "say that again", "repeat that", "repeat please",
+            "sorry what", "sorry?", "what?", "huh?", "pardon",
+            "i didn't get that", "didn't catch that", "didn't understand",
+            "clarify", "be more specific", "what exactly", "meaning of"
+        ]
+        
+        # Check if user is asking for clarification
+        is_clarification_request = any(phrase in msg_lower for phrase in clarification_phrases)
+        
         # === Off-Topic/Irrelevant Phrases ===
         off_topic_phrases = [
             "weather", "lunch", "dinner", "breakfast", "food", "hungry",
@@ -349,6 +365,7 @@ class InterviewSession:
             "is_off_topic": is_off_topic,
             "is_abusive": is_abusive,
             "is_non_english": is_non_english,
+            "is_clarification_request": is_clarification_request,
             "has_substance": has_substance,
             "quality_score": quality_score,
             "is_relevant": is_relevant,
@@ -408,27 +425,31 @@ CURRENT STATE:
 
 CRITICAL RULES FOR RESPONSE HANDLING:
 
-1. OFF-TOPIC (weather, food, movies, jokes, unrelated):
+1. CLARIFICATION REQUEST ("what do you mean", "I don't understand", "can you explain"):
+   → Say "Sure, let me rephrase that." + ask SAME question in simpler words with examples.
+   → Example: "Sure, let me rephrase. Have you worked on any data projects? For example, using Excel or Python?"
+
+2. OFF-TOPIC (weather, food, movies, jokes, unrelated):
    → Say "Let's get back to the interview." + ask next question. NO praise.
 
-2. CASUAL GREETING ("I'm good", "how are you", "what about you"):
+3. CASUAL GREETING ("I'm good", "how are you", "what about you"):
    → Say "Good to hear!" briefly, then redirect to interview question.
 
-3. "I DON'T KNOW" / UNCERTAIN ("not sure", "can't answer", "no idea"):
+4. "I DON'T KNOW" / UNCERTAIN ("not sure", "can't answer", "no idea"):
    → Say "That's okay, let's try something else." + ask EASIER question. Be supportive.
 
-4. VAGUE BUT RELEVANT (short answer, no examples, no specifics):
+5. VAGUE BUT RELEVANT (short answer, no examples, no specifics):
    → Ask a FOLLOW-UP: "Can you give me a specific example?" or "Could you elaborate?"
    → Only ask ONE follow-up, then move to next topic if still vague.
 
-5. GOOD ANSWER (relevant with some detail):
+6. GOOD ANSWER (relevant with some detail):
    → Use VARIED praise: "{praise_phrase}" then ask next question.
 
-6. EXCELLENT ANSWER (specific examples, technical details, STAR format):
+7. EXCELLENT ANSWER (specific examples, technical details, STAR format):
    → Say "{excellent_phrase}" and reference their answer when asking harder question.
    → Example: "Great example of problem-solving. Building on that, how would you handle..."
 
-7. BEHAVIORAL QUESTIONS - Use STAR prompting:
+8. BEHAVIORAL QUESTIONS - Use STAR prompting:
    → If answer lacks specifics, ask: "What was YOUR specific role?" or "What was the outcome?"
 
 CONVERSATION STYLE:
@@ -443,6 +464,7 @@ Keep response under 40 words total.
 Never cut off mid-sentence.
 
 RESPONSE EXAMPLES:
+- Clarification: "Sure, let me rephrase. [Same question in simpler words with example]"
 - Excellent: "{excellent_phrase} Building on that, [harder question]"
 - Good: "{praise_phrase} [Next question]"
 - Vague: "Can you give me a specific example of that?"
@@ -457,6 +479,7 @@ def get_instruction_for_state(session, user_message, answer_analysis):
     has_substance = answer_analysis["has_substance"]
     is_casual = answer_analysis["is_casual"]
     is_off_topic = answer_analysis.get("is_off_topic", False)
+    is_clarification_request = answer_analysis.get("is_clarification_request", False)
     has_negative = answer_analysis.get("has_negative", False)
     quality_score = answer_analysis.get("quality_score", 1)
     word_count = answer_analysis.get("word_count", 0)
@@ -475,6 +498,8 @@ def get_instruction_for_state(session, user_message, answer_analysis):
     # Build EXPLICIT analysis summary for AI
     user_said_summary = f"USER SAID: \"{user_message[:100]}...\"" if len(user_message) > 100 else f"USER SAID: \"{user_message}\""
     analysis_note = f"ANALYSIS: quality={quality_score}/3, words={word_count}, "
+    if is_clarification_request:
+        analysis_note += "ASKING FOR CLARIFICATION, "
     if is_off_topic:
         analysis_note += "OFF-TOPIC (weather/food/unrelated), "
     if is_casual:
@@ -490,11 +515,17 @@ def get_instruction_for_state(session, user_message, answer_analysis):
     else:
         analysis_note += "EXCELLENT - great detail! "
     
+    # === HANDLE CLARIFICATION REQUESTS FIRST (before off-topic) ===
+    # User didn't understand the question - rephrase it
+    if is_clarification_request:
+        last_topic = session.last_question_topic or "your experience"
+        return f"{user_said_summary}\\n{analysis_note}User is asking for CLARIFICATION - they didn't understand the question.\\nRESPOND: Say 'Sure, let me rephrase that.' then ask the SAME question about '{last_topic}' in simpler words with an example. For instance: 'Have you worked on any projects involving {last_topic}? For example, using specific tools or in coursework?' Under 40 words."
+    
     # Track if this answer was vague for follow-up logic
-    is_vague = quality_score == 1 and not is_off_topic and not is_casual and word_count >= 5
+    is_vague = quality_score == 1 and not is_off_topic and not is_casual and not is_clarification_request and word_count >= 5
     
     # Handle "I don't know" / uncertainty - be supportive
-    if has_negative and ("don't know" in user_message.lower() or "not sure" in user_message.lower() or "no idea" in user_message.lower()):
+    if has_negative and not is_clarification_request and ("don't know" in user_message.lower() or "not sure" in user_message.lower() or "no idea" in user_message.lower()):
         question_topic = session.get_next_question_topic()
         session.last_question_topic = question_topic
         # Decrease difficulty for easier question
