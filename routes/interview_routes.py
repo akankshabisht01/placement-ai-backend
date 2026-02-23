@@ -49,13 +49,18 @@ class InterviewSession:
         self.question_count = 0
         self.conversation_history = []
         self.started_at = datetime.utcnow()
-        self.questions_asked = []  # Track to avoid duplicates
+        self.questions_asked = []  # Track actual question text to avoid duplicates
         self.asked_topics = []  # Track question topics
         self.answers = []
+        self.substantive_answers = []  # Only answers with real content (for scoring)
+        self.last_question_topic = None  # Track what was just asked for answer matching
+        self.quality_scores = []  # Track quality score (0-3) for each answer
         # Smart features
         self.difficulty_level = 1  # 1=easy, 2=medium, 3=hard
         self.correct_answers = 0
         self.total_questions = 8
+        self.interview_duration_minutes = 30  # Total interview time
+        self.scenario_time_threshold = 20  # Start scenarios after 20 minutes
     
     def to_dict(self):
         return {
@@ -69,9 +74,15 @@ class InterviewSession:
             "started_at": self.started_at.isoformat(),
             "questions_asked": self.questions_asked,
             "answers": self.answers,
+            "substantive_answers": self.substantive_answers,
+            "quality_scores": self.quality_scores,
             "difficulty_level": self.difficulty_level,
             "correct_answers": self.correct_answers
         }
+    
+    def get_elapsed_minutes(self):
+        """Get elapsed time since interview started"""
+        return (datetime.utcnow() - self.started_at).total_seconds() / 60
     
     def get_question_pool(self):
         """Get questions organized by difficulty level"""
@@ -143,56 +154,187 @@ class InterviewSession:
         return scenario
     
     def analyze_answer(self, message):
-        """Analyze if answer is substantive or casual"""
+        """
+        Comprehensive answer analysis with off-topic detection and quality scoring.
+        Returns: {is_casual, is_off_topic, has_substance, quality_score, is_relevant}
+        quality_score: 0=poor/off-topic, 1=vague/minimal, 2=decent, 3=excellent
+        """
         msg_lower = message.lower().strip()
+        word_count = len(message.split())
         
+        # === Casual/Social Phrases ===
         casual_phrases = [
             "doing great", "doing good", "i'm good", "i'm fine", "doing fine",
             "good thanks", "fine thanks", "how are you", "what about you",
-            "hello", "hi", "hey", "good morning", "good afternoon", "i'm doing well"
+            "hello", "hi", "hey", "good morning", "good afternoon", "i'm doing well",
+            "nice to meet", "pleasure to meet", "thank you for asking"
         ]
         
-        is_casual = any(phrase in msg_lower for phrase in casual_phrases) and len(msg_lower.split()) < 10
-        has_substance = len(message.split()) > 8 and not is_casual
+        # === Off-Topic/Irrelevant Phrases ===
+        off_topic_phrases = [
+            "weather", "lunch", "dinner", "breakfast", "food", "hungry",
+            "movie", "music", "game", "sports", "cricket", "football", "basketball",
+            "girlfriend", "boyfriend", "dating", "party", "vacation", "holiday",
+            "what time is it", "what day is it", "where are you from",
+            "how old are you", "are you real", "are you a bot", "are you ai",
+            "tell me a joke", "sing a song", "write a poem",
+            "pizza", "burger", "coffee", "tea", "water",
+            "i love you", "that's funny", "lol", "haha", "lmao"
+        ]
         
-        return {"is_casual": is_casual, "has_substance": has_substance}
+        # === Negative/Uncertain Indicators ===
+        negative_phrases = [
+            "i don't know", "i dont know", "not sure", "no idea", "can't answer",
+            "cannot answer", "i have no", "never done", "never worked",
+            "i guess", "maybe", "perhaps", "i think so", "probably",
+            "i'm not familiar", "haven't used", "don't have experience",
+            "no experience", "not really", "sorry i", "sorry, i"
+        ]
+        
+        # === Positive/Quality Indicators ===
+        positive_indicators = [
+            "for example", "such as", "specifically", "in particular",
+            "i implemented", "i developed", "i created", "i built", "i designed",
+            "my approach", "my strategy", "my solution", "i solved",
+            "years of experience", "worked on", "contributed to",
+            "led the", "managed the", "responsible for",
+            "using", "with", "through", "by implementing"
+        ]
+        
+        # === Technical Keywords ===
+        technical_keywords = [
+            'algorithm', 'database', 'api', 'framework', 'architecture', 'deploy',
+            'testing', 'agile', 'scrum', 'git', 'docker', 'kubernetes', 'cloud',
+            'aws', 'azure', 'react', 'node', 'python', 'java', 'sql', 'mongodb',
+            'microservice', 'ci/cd', 'optimization', 'performance', 'debug',
+            'machine learning', 'data structure', 'component', 'server', 'client'
+        ]
+        
+        # === Analysis ===
+        is_casual = any(phrase in msg_lower for phrase in casual_phrases) and word_count < 12
+        is_off_topic = any(phrase in msg_lower for phrase in off_topic_phrases)
+        has_negative = any(phrase in msg_lower for phrase in negative_phrases)
+        has_positive = any(phrase in msg_lower for phrase in positive_indicators)
+        tech_count = sum(1 for kw in technical_keywords if kw in msg_lower)
+        
+        # === Check relevance to last question ===
+        is_relevant = True
+        if self.last_question_topic:
+            topic_keywords = self.last_question_topic.lower().split()
+            # Remove common words
+            topic_keywords = [w for w in topic_keywords if len(w) > 3 and w not in ['your', 'about', 'with', 'the', 'and', 'how', 'what', 'when', 'where', 'experience']]
+            # Check if any topic keyword appears in answer
+            has_topic_match = any(kw in msg_lower for kw in topic_keywords)
+            # If question was about specific topic and answer has no relation
+            if not has_topic_match and not has_positive and tech_count == 0:
+                is_relevant = word_count > 15  # Give benefit of doubt for longer answers
+        
+        # === Calculate Quality Score (0-3) ===
+        quality_score = 0
+        
+        if is_off_topic:
+            quality_score = 0
+        elif is_casual:
+            quality_score = 0
+        elif has_negative and word_count < 15:
+            quality_score = 1
+        elif not is_relevant:
+            quality_score = 0
+        else:
+            # Base score on content quality
+            if word_count < 8:
+                quality_score = 1
+            elif word_count < 15:
+                quality_score = 1 if not has_positive else 2
+            elif word_count < 25:
+                quality_score = 2 if has_positive or tech_count > 0 else 1
+            else:
+                # Long answer
+                if has_positive and tech_count >= 2:
+                    quality_score = 3
+                elif has_positive or tech_count >= 1:
+                    quality_score = 2
+                else:
+                    quality_score = 1 if not has_negative else 1
+        
+        # Boost for technical content
+        if tech_count >= 3 and quality_score < 3:
+            quality_score = min(3, quality_score + 1)
+        
+        # Penalize heavy negatives
+        if has_negative and "don't know" in msg_lower:
+            quality_score = min(quality_score, 1)
+        
+        has_substance = quality_score >= 2
+        
+        return {
+            "is_casual": is_casual,
+            "is_off_topic": is_off_topic,
+            "has_substance": has_substance,
+            "quality_score": quality_score,
+            "is_relevant": is_relevant,
+            "word_count": word_count,
+            "tech_count": tech_count,
+            "has_negative": has_negative
+        }
 
 
 def get_smart_system_prompt(session):
     """Generate intelligent system prompt like Groq engine"""
     difficulty_desc = {1: "basic/entry-level", 2: "intermediate", 3: "advanced/senior-level"}.get(session.difficulty_level, "intermediate")
     already_asked = ", ".join(session.asked_topics[-5:]) if session.asked_topics else "none yet"
+    elapsed_minutes = session.get_elapsed_minutes()
     
     return f"""You are Alex, a professional AI interviewer for the {session.position} position.
 
 CURRENT STATE:
 - Difficulty Level: {session.difficulty_level}/3 ({difficulty_desc})
 - Question #{session.question_count + 1} of {session.total_questions}
+- Time elapsed: {elapsed_minutes:.1f} minutes
 - Already asked about: {already_asked}
 
-STRICT RULES:
-1. ANALYZE the candidate's response quality:
-   - If answer is RELEVANT and shows understanding → Brief appreciation (1-2 words like "Good!" or "Nice!") + next question
-   - If answer is IRRELEVANT, vague, or off-topic → Skip appreciation, just ask next question directly
-   - If answer is casual/social (like "I'm good", "doing great") → Move to next question without praise
+CRITICAL RULES FOR RESPONSE HANDLING:
+1. If answer is OFF-TOPIC (weather, food, movies, jokes, unrelated topics):
+   → Say "Let's focus on the interview." then ask next question. NO praise.
 
-2. NEVER repeat a question you already asked (check the "Already asked about" list)
-3. Ask {difficulty_desc} questions appropriate for the current level
-4. Keep total response under 35 words
-5. Ask questions specifically relevant to {session.position}
-6. Never cut off mid-sentence
+2. If answer is CASUAL/SOCIAL ("I'm good", "how are you", "what about you"):
+   → Skip directly to next question. NO praise.
 
-RESPONSE FORMAT:
-- Good technical answer: "Good! [Next question about new topic]"
-- Poor/irrelevant answer: "[Next question directly without any praise]"
-- Casual social response: "[Next question directly]"
+3. If answer shows UNCERTAINTY ("I don't know", "not sure", "maybe"):
+   → Move on without praise. Ask an easier question.
+
+4. If answer is RELEVANT but VAGUE (short, no examples):
+   → No praise. Ask a follow-up or next question.
+
+5. If answer is RELEVANT with SUBSTANCE (specific examples, technical details):
+   → Brief praise (1-2 words: "Good!" or "Nice!") then next question.
+
+NEVER repeat a question you already asked (check "Already asked about" list).
+Ask {difficulty_desc} questions appropriate for current level.
+Keep response under 35 words total.
+Never cut off mid-sentence.
+
+RESPONSE EXAMPLES:
+- Excellent answer: "Great point! [Next question]"
+- Good answer: "Nice! [Next question]"  
+- Off-topic answer: "Let's focus on the interview. [Next question]"
+- Vague/poor answer: "[Next question directly]"
+- Casual response: "[Next question directly]"
 """
 
 
 def get_instruction_for_state(session, user_message, answer_analysis):
-    """Get specific instruction based on interview state"""
+    """Get specific instruction based on interview state with quality-aware logic"""
     has_substance = answer_analysis["has_substance"]
     is_casual = answer_analysis["is_casual"]
+    is_off_topic = answer_analysis.get("is_off_topic", False)
+    quality_score = answer_analysis.get("quality_score", 1)
+    elapsed_minutes = session.get_elapsed_minutes()
+    
+    # Handle off-topic responses in any state
+    if is_off_topic:
+        question_topic = session.get_next_question_topic()
+        return f"Say 'Let's focus on the interview.' then ask about {question_topic}. Under 30 words total."
     
     if session.state == "greeting":
         if is_casual:
@@ -201,16 +343,20 @@ def get_instruction_for_state(session, user_message, answer_analysis):
     
     elif session.state == "introduction":
         question_topic = session.get_next_question_topic()
-        if has_substance:
+        session.last_question_topic = question_topic  # Track for relevance checking
+        if quality_score >= 2:
             return f"Say 'Thanks!' briefly, then ask about {question_topic}. Under 30 words."
         else:
             return f"Ask about {question_topic} directly without praise. Under 25 words."
     
     elif session.state == "interviewing":
-        # Check if time for scenario questions (last 2 questions)
-        if session.question_count >= session.total_questions - 2:
+        # TIME-BASED scenario trigger (after 20 minutes) OR count-based (last 2 questions)
+        should_do_scenario = (elapsed_minutes >= session.scenario_time_threshold) or (session.question_count >= session.total_questions - 2)
+        
+        if should_do_scenario and session.question_count < session.total_questions:
             scenario_topic = session.get_scenario_topic()
-            if has_substance:
+            session.last_question_topic = scenario_topic
+            if quality_score >= 2:
                 return f"Say 'Good!' then present this scenario: {scenario_topic}. Under 45 words total."
             else:
                 return f"Present this scenario directly: {scenario_topic}. Under 40 words."
@@ -221,10 +367,17 @@ def get_instruction_for_state(session, user_message, answer_analysis):
         
         # Get next question based on difficulty
         question_topic = session.get_next_question_topic()
-        if has_substance:
-            return f"Say 'Good!' or 'Nice!' (1-2 words), then ask about {question_topic}. Under 30 words total."
+        session.last_question_topic = question_topic  # Track for relevance checking
+        
+        # Quality-aware response
+        if quality_score >= 3:
+            return f"Say 'Excellent!' then ask a harder question about {question_topic}. Under 30 words total."
+        elif quality_score == 2:
+            return f"Say 'Good!' (1 word), then ask about {question_topic}. Under 30 words total."
+        elif is_casual:
+            return f"Ask about {question_topic} directly without any acknowledgment. Under 25 words."
         else:
-            return f"Ask about {question_topic} directly without any appreciation. Under 25 words."
+            return f"Ask about {question_topic} directly without praise. Under 25 words."
     
     elif session.state == "closing":
         return "Give a warm closing, thank them for their time, wish them luck. Under 20 words."
@@ -233,8 +386,13 @@ def get_instruction_for_state(session, user_message, answer_analysis):
 
 
 def update_session_state(session, answer_analysis):
-    """Update interview state and difficulty based on answer quality"""
-    has_substance = answer_analysis["has_substance"]
+    """Update interview state and difficulty based on answer quality score"""
+    quality_score = answer_analysis.get("quality_score", 1)
+    is_off_topic = answer_analysis.get("is_off_topic", False)
+    has_negative = answer_analysis.get("has_negative", False)
+    
+    # Track quality score
+    session.quality_scores.append(quality_score)
     
     if session.state == "greeting":
         session.state = "introduction"
@@ -246,13 +404,20 @@ def update_session_state(session, answer_analysis):
     elif session.state == "interviewing":
         session.question_count += 1
         
-        # Increase difficulty if answer was good
-        if has_substance:
+        # Only increase difficulty for truly good answers (quality_score >= 2)
+        if quality_score >= 2 and not is_off_topic:
             session.correct_answers += 1
-            # Increase difficulty every 2 good answers
+            # Increase difficulty after 2 good answers
             if session.correct_answers % 2 == 0 and session.difficulty_level < 3:
                 session.difficulty_level += 1
                 print(f"⬆️ Difficulty increased to level {session.difficulty_level}")
+        
+        # DECREASE difficulty if struggling (multiple poor answers)
+        recent_scores = session.quality_scores[-3:] if len(session.quality_scores) >= 3 else session.quality_scores
+        if len(recent_scores) >= 3 and all(s <= 1 for s in recent_scores):
+            if session.difficulty_level > 1:
+                session.difficulty_level -= 1
+                print(f"⬇️ Difficulty decreased to level {session.difficulty_level}")
         
         # Check if time to close
         if session.question_count >= session.total_questions:
@@ -301,7 +466,7 @@ def process_response():
     try:
         data = request.get_json()
         session_id = data.get('session_id')
-        user_message = data.get('message', '')
+        user_message = data.get('message', '').strip()
         
         # Get session
         if session_id not in active_sessions:
@@ -313,8 +478,27 @@ def process_response():
         
         interview_session = active_sessions[session_id]
         
-        # Analyze user's answer quality
+        # === Handle empty/silence responses ===
+        if not user_message or len(user_message) < 3:
+            # Treat as "no response" - prompt them to answer
+            return jsonify({
+                "success": True,
+                "message": "I didn't catch that. Could you please repeat your answer?",
+                "state": interview_session.state,
+                "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
+                "should_speak": True,
+                "was_empty": True
+            })
+        
+        # Analyze user's answer quality (comprehensive analysis)
         answer_analysis = interview_session.analyze_answer(user_message)
+        
+        # Log analysis for debugging
+        print(f"📊 Answer Analysis: quality={answer_analysis['quality_score']}, "
+              f"off_topic={answer_analysis['is_off_topic']}, "
+              f"casual={answer_analysis['is_casual']}, "
+              f"tech_count={answer_analysis['tech_count']}")
         
         # Add user message to history
         interview_session.conversation_history.append({
@@ -322,6 +506,10 @@ def process_response():
             "content": user_message
         })
         interview_session.answers.append(user_message)
+        
+        # === Track substantive answers separately (for accurate scoring) ===
+        if answer_analysis["quality_score"] >= 2 and not answer_analysis["is_off_topic"]:
+            interview_session.substantive_answers.append(user_message)
         
         # Generate smart system prompt and instruction
         system_prompt = get_smart_system_prompt(interview_session)
@@ -792,11 +980,22 @@ def _generate_tips(scores):
 
 
 def generate_interview_feedback(session):
-    """Generate comprehensive AI-powered feedback for completed interview"""
+    """Generate comprehensive AI-powered feedback for completed interview using Groq"""
     
     duration_minutes = round((datetime.utcnow() - session.started_at).total_seconds() / 60, 1)
     questions_answered = len(session.answers)
-    quality = _analyze_response_quality(session.answers)
+    
+    # Use SUBSTANTIVE answers for quality analysis (excludes casual/off-topic)
+    substantive_count = len(session.substantive_answers)
+    quality = _analyze_response_quality(session.substantive_answers if session.substantive_answers else session.answers)
+    
+    # Add substantive_answers to quality dict for ratio calculation
+    quality['substantive_answers'] = session.substantive_answers
+    
+    # Calculate average quality score from tracked scores
+    avg_quality_score = sum(session.quality_scores) / len(session.quality_scores) if session.quality_scores else 1
+    
+    print(f"[Feedback] Total answers: {questions_answered}, Substantive: {substantive_count}, Avg quality: {avg_quality_score:.1f}")
     
     # Check for early termination
     early_termination = None
@@ -815,12 +1014,21 @@ def generate_interview_feedback(session):
             "penalty": 15
         }
     
-    # Try AI-powered analysis using Perplexity
+    # Check for mostly casual/off-topic responses
+    if substantive_count < questions_answered * 0.3:  # Less than 30% substantive
+        early_termination = {
+            "detected": True,
+            "severity": "high",
+            "message": "Most responses were off-topic, casual, or lacked substance.",
+            "penalty": 35
+        }
+    
+    # Try AI-powered analysis using GROQ (instead of Perplexity)
     ai_analysis = None
     try:
-        api_key = get_perplexity_key()
+        api_key = get_groq_key()
         if api_key and session.conversation_history:
-            # Build conversation summary
+            # Build conversation summary (only substantive parts)
             conv_text = ""
             for msg in session.conversation_history:
                 role = "Interviewer" if msg['role'] == 'assistant' else "Candidate"
@@ -831,71 +1039,60 @@ def generate_interview_feedback(session):
 INTERVIEW TRANSCRIPT:
 {conv_text}
 
-CANDIDATE INFO:
+CANDIDATE METRICS:
 - Name: {session.user_name}
 - Position: {session.position}
-- Questions answered: {questions_answered}
+- Total responses: {questions_answered}
+- Substantive responses: {substantive_count}
+- Average quality score: {avg_quality_score:.1f}/3
 - Average response length: {quality['avg_length']} words
 - Technical keywords used: {quality['technical_keywords']}
+- Casual/filler phrases: {quality['casual_count']}
 
-Provide a STRICT and HONEST evaluation. Do NOT inflate scores. Score based on ACTUAL content quality.
+CRITICAL SCORING RULES:
+1. If most responses were off-topic/casual (substantive < 50%), scores should be LOW (20-40)
+2. If candidate said "I don't know" frequently, technical_knowledge should be LOW
+3. Short vague answers = LOW scores (30-50)
+4. Only give 70+ for specific examples and demonstrated knowledge
+5. Only give 85+ for exceptional detail with real project examples
 
-SCORING RUBRIC (0-100 for each):
-- technical_knowledge: How well did they demonstrate technical understanding? (0-30: vague/wrong, 31-60: basic understanding, 61-80: good knowledge, 81-100: expert level with specific examples)
-- communication: How clearly did they express themselves? (0-30: unclear/rambling, 31-60: understandable, 61-80: clear and structured, 81-100: excellent articulation with STAR method)
-- problem_solving: Did they show analytical thinking? (0-30: no analysis, 31-60: basic approach, 61-80: structured thinking, 81-100: systematic with trade-off analysis)
-- professionalism: Professional demeanor and responses? (0-30: casual/unprepared, 31-60: adequate, 61-80: professional, 81-100: exemplary)
-- enthusiasm: Interest and passion for the role? (0-30: disinterested, 31-60: neutral, 61-80: interested, 81-100: genuinely passionate)
-- confidence: Self-assurance in responses? (0-30: very unsure, 31-60: somewhat confident, 61-80: confident, 81-100: poised and assured)
+SCORING RUBRIC (0-100):
+- technical_knowledge: 0-30=vague/wrong, 31-50=minimal understanding, 51-70=basic knowledge, 71-85=good with examples, 86-100=expert
+- communication: 0-30=unclear, 31-50=understandable but unstructured, 51-70=clear, 71-85=well-structured, 86-100=excellent STAR method
+- problem_solving: 0-30=no analysis, 31-50=basic, 51-70=some approach, 71-85=structured, 86-100=systematic with trade-offs
+- professionalism: 0-30=very casual, 31-50=adequate, 51-70=professional, 71-85=polished, 86-100=exemplary
+- enthusiasm: 0-30=disinterested, 31-50=neutral, 51-70=interested, 71-85=eager, 86-100=genuinely passionate
+- confidence: 0-30=very unsure, 31-50=hesitant, 51-70=confident, 71-85=assured, 86-100=poised
 
-You MUST respond in EXACTLY this JSON format (no other text):
+Respond ONLY with this JSON (no markdown, no explanation):
 {{
-  "scores": {{
-    "technical_knowledge": <number>,
-    "communication": <number>,
-    "problem_solving": <number>,
-    "professionalism": <number>,
-    "enthusiasm": <number>,
-    "confidence": <number>
-  }},
+  "scores": {{"technical_knowledge": <num>, "communication": <num>, "problem_solving": <num>, "professionalism": <num>, "enthusiasm": <num>, "confidence": <num>}},
   "strengths": ["<strength1>", "<strength2>", "<strength3>"],
   "improvements": ["<improvement1>", "<improvement2>", "<improvement3>"],
-  "knowledge_assessment": {{
-    "demonstrated_skills": ["<skill1>", "<skill2>"],
-    "skill_gaps": ["<gap1>", "<gap2>"],
-    "depth_of_knowledge": "<shallow/moderate/deep>"
-  }},
-  "communication_feedback": {{
-    "clarity": "<brief assessment>",
-    "structure": "<brief assessment>",
-    "vocabulary": "<brief assessment>"
-  }},
-  "interviewer_guidance": {{
-    "hiring_recommendation": "<Strong Hire/Hire/Maybe/No Hire>",
-    "reasoning": "<1-2 sentence explanation>",
-    "follow_up_areas": ["<area1>", "<area2>"]
-  }},
-  "detailed_feedback": "<2-3 sentence overall assessment>"
+  "knowledge_assessment": {{"demonstrated_skills": ["<skill1>"], "skill_gaps": ["<gap1>"], "depth_of_knowledge": "<shallow/moderate/deep>"}},
+  "communication_feedback": {{"clarity": "<assessment>", "structure": "<assessment>", "vocabulary": "<assessment>"}},
+  "interviewer_guidance": {{"hiring_recommendation": "<Strong Hire/Hire/Maybe/No Hire>", "reasoning": "<explanation>", "follow_up_areas": ["<area1>"]}},
+  "detailed_feedback": "<2-3 sentence assessment>"
 }}"""
 
-            print(f"[Interview Feedback] Calling Perplexity API for analysis...")
+            print(f"[Interview Feedback] Calling GROQ API for analysis...")
             
             response = requests.post(
-                PERPLEXITY_API_URL,
+                GROQ_API_URL,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "sonar",
+                    "model": "llama-3.1-8b-instant",
                     "messages": [
-                        {"role": "system", "content": "You are an expert interview evaluator. Respond ONLY with valid JSON, no markdown, no code blocks, no explanation."},
+                        {"role": "system", "content": "You are an expert interview evaluator. Respond ONLY with valid JSON, no markdown, no code blocks."},
                         {"role": "user", "content": analysis_prompt}
                     ],
                     "temperature": 0.3,
                     "max_tokens": 1000
                 },
-                timeout=45
+                timeout=30
             )
             
             if response.status_code == 200:
@@ -910,15 +1107,14 @@ You MUST respond in EXACTLY this JSON format (no other text):
                 ai_text = ai_text.strip()
                 
                 # Try to extract JSON from the response
-                import re
                 json_match = re.search(r'\{[\s\S]*\}', ai_text)
                 if json_match:
                     ai_analysis = json.loads(json_match.group())
-                    print(f"[Interview Feedback] AI analysis successful: scores={ai_analysis.get('scores', {})}")
+                    print(f"[Interview Feedback] GROQ analysis successful: scores={ai_analysis.get('scores', {})}")
                 else:
                     print(f"[Interview Feedback] Could not find JSON in AI response: {ai_text[:200]}")
             else:
-                print(f"[Interview Feedback] Perplexity API error: {response.status_code}")
+                print(f"[Interview Feedback] GROQ API error: {response.status_code}")
                 
     except Exception as e:
         print(f"[Interview Feedback] AI analysis failed: {e}")
@@ -948,6 +1144,22 @@ You MUST respond in EXACTLY this JSON format (no other text):
         
         if quality['casual_count'] > 3:
             scores['professionalism'] = min(scores['professionalism'], 55)
+        
+        # CRITICAL: Cap scores if too few substantive answers
+        total_responses = questions_answered if questions_answered > 0 else 1
+        substantive_ratio = len(quality.get('substantive_answers', [])) / max(1, total_responses)
+        print(f"[Interview Feedback] Substantive ratio: {substantive_ratio:.2f} ({len(quality.get('substantive_answers', []))}/{total_responses})")
+        
+        if substantive_ratio < 0.3:
+            # Less than 30% good answers - cap all scores at 50
+            print(f"[Interview Feedback] LOW substantive ratio - capping all scores at 50")
+            for key in scores:
+                scores[key] = min(scores[key], 50)
+        elif substantive_ratio < 0.5:
+            # Less than 50% good answers - cap all scores at 65
+            print(f"[Interview Feedback] MEDIUM substantive ratio - capping all scores at 65")
+            for key in scores:
+                scores[key] = min(scores[key], 65)
         
         overall_score = _calculate_weighted_score(scores)
         performance_level = _get_performance_level(overall_score)
