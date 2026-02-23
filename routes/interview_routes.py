@@ -188,8 +188,18 @@ class InterviewSession:
             "idiot", "stupid", "dumb", "hate you", "shut up", "go away",
             "f**k", "f***", "s**t", "a**", "b**ch", "wtf", "stfu",
             "screw you", "piss off", "get lost", "you suck", "loser",
-            "madarchod", "bhenchod", "chutiya", "gandu", "harami", "sala",
-            "behenchod", "mc", "bc", "gaand", "lund", "chut"
+            # Hindi/Hinglish abusive words (multiple spellings)
+            "madarchod", "madarcho", "motherchod", "mc",
+            "bhenchod", "behenchod", "banchod", "benchod", "bc", "bsdk",
+            "chutiya", "chutia", "chodu", "chod", "chodna",
+            "gandu", "gand", "gaand", "gand mara", "gand maro", "gand mar",
+            "harami", "haramkhor", "haraamkhor",
+            "sala", "saala", "sali", "saali",
+            "lund", "lauda", "lawda", "loda",
+            "chut", "bhosdike", "bhosdi", "bhos",
+            "randi", "rand", "raand",
+            "kutte", "kutta", "kamina", "kamine",
+            "ullu", "gadha", "bakchod", "bakchodi"
         ]
         
         # === Non-English Detection (Hindi/other languages) ===
@@ -201,8 +211,16 @@ class InterviewSession:
             any(ord(c) >= 0x0600 and ord(c) <= 0x06FF for c in message),
             # Chinese
             any(ord(c) >= 0x4E00 and ord(c) <= 0x9FFF for c in message),
-            # Common Hindi romanized words
-            any(word in msg_lower for word in ['kya', 'kaise', 'hai', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi', 'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'kitna', 'accha', 'theek'])
+            # Common Hindi romanized words (expanded list)
+            any(word in msg_lower for word in [
+                'kya', 'kaise', 'hai', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi', 
+                'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'kitna', 'accha', 'theek',
+                'teri', 'tera', 'tere', 'meri', 'mera', 'mere', 'bahut', 'gaya', 'gayi', 'gaye',
+                'maru', 'maro', 'masti', 'bhaiya', 'bhai', 'didi', 'behen', 'abhi', 'kaha',
+                'raha', 'rahi', 'rahe', 'kar', 'karna', 'karta', 'karti', 'acha', 'aur',
+                'lekin', 'matlab', 'samajh', 'dekh', 'dekho', 'suno', 'bata', 'batao',
+                'jao', 'aao', 'chalo', 'chal', 'ruk', 'ruko', 'bol', 'bolna', 'bolta'
+            ])
         ]
         is_non_english = any(non_english_indicators)
         
