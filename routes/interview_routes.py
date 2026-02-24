@@ -5,6 +5,7 @@ Provides AI interview functionality with smart features:
 - No duplicate questions
 - Conditional compliments (only for good answers)
 - Position-specific questions
+- D-ID talking avatar video generation (optional)
 """
 from flask import Blueprint, request, jsonify, session
 from datetime import datetime
@@ -13,6 +14,7 @@ import json
 import re
 import random
 import requests
+import time
 from utils.db import get_db
 from bson import ObjectId
 
@@ -20,6 +22,125 @@ interview_bp = Blueprint('interview', __name__, url_prefix='/api/interview')
 
 # Groq API configuration (ULTRA FAST ~200-500ms)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# ============= D-ID TALKING AVATAR CONFIGURATION =============
+# D-ID API for realistic talking interviewer face
+D_ID_API_URL = "https://api.d-id.com"
+
+# Interviewer image - Professional male in suit (hosted on D-ID compatible CDN)
+# You can replace this with any high-quality face image URL
+INTERVIEWER_IMAGE_URL = "https://create-images-results.d-id.com/DefaultPresenters/Matan_f/image.jpeg"
+
+def get_did_key():
+    """Get D-ID API key from environment"""
+    key = os.getenv('D_ID_API_KEY') or os.getenv('DID_API_KEY') or os.getenv('d_id_api_key')
+    if not key:
+        print("⚠️ D-ID API key not set. Video avatar feature disabled.")
+        print("   Get API key at: https://www.d-id.com/api")
+        print("   Set D_ID_API_KEY in Railway environment variables")
+    return key
+
+# Validate D-ID key at startup
+_did_key = get_did_key()
+if _did_key:
+    print(f"✅ D-ID API key loaded: {_did_key[:8]}...{_did_key[-4:]}")
+else:
+    print("ℹ️ D-ID not configured - using browser TTS only")
+
+def create_did_video(text, voice_id="en-US-GuyNeural"):
+    """
+    Create a talking avatar video using D-ID API
+    
+    Args:
+        text: The text for the avatar to speak
+        voice_id: Microsoft voice ID (en-US-GuyNeural for male)
+    
+    Returns:
+        dict with video_url or error
+    """
+    api_key = get_did_key()
+    if not api_key:
+        return {"success": False, "error": "D-ID API key not configured"}
+    
+    try:
+        # Create talk request
+        headers = {
+            "Authorization": f"Basic {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "source_url": INTERVIEWER_IMAGE_URL,
+            "script": {
+                "type": "text",
+                "input": text,
+                "provider": {
+                    "type": "microsoft",
+                    "voice_id": voice_id
+                }
+            },
+            "config": {
+                "stitch": True,  # Better quality
+                "result_format": "mp4"
+            }
+        }
+        
+        # Create the talk
+        response = requests.post(
+            f"{D_ID_API_URL}/talks",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code != 201:
+            print(f"❌ D-ID create error: {response.status_code} - {response.text}")
+            return {"success": False, "error": f"D-ID API error: {response.status_code}"}
+        
+        talk_data = response.json()
+        talk_id = talk_data.get("id")
+        
+        if not talk_id:
+            return {"success": False, "error": "No talk ID returned"}
+        
+        # Poll for completion (max 30 seconds)
+        max_attempts = 30
+        for attempt in range(max_attempts):
+            time.sleep(1)  # Wait 1 second between polls
+            
+            status_response = requests.get(
+                f"{D_ID_API_URL}/talks/{talk_id}",
+                headers={"Authorization": f"Basic {api_key}"},
+                timeout=10
+            )
+            
+            if status_response.status_code != 200:
+                continue
+            
+            status_data = status_response.json()
+            status = status_data.get("status")
+            
+            if status == "done":
+                video_url = status_data.get("result_url")
+                print(f"✅ D-ID video ready: {video_url[:50]}...")
+                return {
+                    "success": True,
+                    "video_url": video_url,
+                    "duration": status_data.get("duration", 0)
+                }
+            elif status == "error":
+                return {"success": False, "error": "D-ID video generation failed"}
+            
+            # Still processing
+            print(f"⏳ D-ID processing... attempt {attempt + 1}/{max_attempts}")
+        
+        return {"success": False, "error": "D-ID video generation timeout"}
+        
+    except requests.exceptions.Timeout:
+        return {"success": False, "error": "D-ID request timeout"}
+    except Exception as e:
+        print(f"❌ D-ID error: {e}")
+        return {"success": False, "error": str(e)}
 
 def get_groq_key():
     """Get Groq API key from environment"""
@@ -1741,3 +1862,66 @@ Respond ONLY with this JSON (no markdown, no explanation):
         "scorecard": scorecard,
         "tips": tips
     }
+
+
+# ============= D-ID VIDEO GENERATION ENDPOINT =============
+
+@interview_bp.route('/generate-video', methods=['POST'])
+def generate_talking_video():
+    """
+    Generate a talking avatar video for the AI response.
+    
+    Request body:
+    {
+        "text": "The text for the avatar to speak",
+        "session_id": "optional - for tracking"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "video_url": "https://...",
+        "duration": 5.2
+    }
+    """
+    try:
+        data = request.get_json()
+        text = data.get('text', '').strip()
+        
+        if not text:
+            return jsonify({
+                "success": False,
+                "error": "No text provided"
+            }), 400
+        
+        # Check if D-ID is configured
+        if not get_did_key():
+            return jsonify({
+                "success": False,
+                "error": "D-ID not configured. Use browser TTS instead.",
+                "use_tts": True
+            }), 503
+        
+        # Create the talking video
+        result = create_did_video(text)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"❌ Generate video error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "use_tts": True  # Fallback to TTS
+        }), 500
+
+
+@interview_bp.route('/avatar-status', methods=['GET'])
+def get_avatar_status():
+    """Check if D-ID avatar feature is available"""
+    api_key = get_did_key()
+    return jsonify({
+        "available": api_key is not None,
+        "interviewer_image": INTERVIEWER_IMAGE_URL if api_key else None,
+        "message": "D-ID avatar ready" if api_key else "D-ID not configured - using browser TTS"
+    })
