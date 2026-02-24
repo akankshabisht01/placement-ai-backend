@@ -1571,7 +1571,9 @@ CRITICAL SCORING RULES:
 6. Only give 70+ for specific examples and demonstrated knowledge
 7. Only give 85+ for exceptional detail with real project examples
 
-SCORING RUBRIC (0-100):
+⚠️ CRITICAL: ALL scores MUST be on a 0-100 scale (NOT 1-10). A mediocre response = 50, good = 70, excellent = 85+.
+
+SCORING RUBRIC (0-100 scale - use full range):
 - technical_knowledge: 0-30=vague/wrong, 31-50=minimal understanding, 51-70=basic knowledge, 71-85=good with examples, 86-100=expert
 - communication: 0-30=unclear/inappropriate, 31-50=understandable but unstructured, 51-70=clear, 71-85=well-structured, 86-100=excellent STAR method
 - problem_solving: 0-30=no analysis, 31-50=basic, 51-70=some approach, 71-85=structured, 86-100=systematic with trade-offs
@@ -1639,6 +1641,15 @@ Respond ONLY with this JSON (no markdown, no explanation):
     # Build feedback from AI analysis or fallback
     if ai_analysis and 'scores' in ai_analysis:
         scores = ai_analysis['scores']
+        
+        # Auto-detect if AI returned scores on 1-10 scale instead of 0-100
+        score_values = [int(v) for v in scores.values() if isinstance(v, (int, float, str)) and str(v).isdigit()]
+        if score_values and all(v <= 10 for v in score_values):
+            print(f"[Interview Feedback] Detected 1-10 scale scores, converting to 0-100: {scores}")
+            for key in scores:
+                scores[key] = int(scores[key]) * 10
+            print(f"[Interview Feedback] Converted scores: {scores}")
+        
         # Validate and cap scores
         for key in scores:
             scores[key] = max(0, min(100, int(scores[key])))
