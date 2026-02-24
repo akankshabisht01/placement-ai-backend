@@ -1485,8 +1485,18 @@ def generate_interview_feedback(session):
     early_termination = None
     max_score_cap = 100  # Default no cap
     
+    # NO ANSWERS - user exited immediately without responding
+    if questions_answered == 0:
+        early_termination = {
+            "detected": True,
+            "severity": "critical",
+            "message": "Interview not completed. No responses were provided.",
+            "penalty": 0  # No penalty needed - we set specific scores below
+        }
+        max_score_cap = 15  # Cap all scores at 15 for no-answer interviews
+    
     # VERY early termination (< 2 min OR < 2 questions) - SEVERE penalty
-    if duration_minutes < 2 or questions_answered < 2:
+    elif duration_minutes < 2 or questions_answered < 2:
         early_termination = {
             "detected": True,
             "severity": "critical",
@@ -1755,96 +1765,133 @@ Respond ONLY with this JSON (no markdown, no explanation):
         
     else:
         # Fallback: generate basic scores from response quality metrics
-        # Start with base score based on overall engagement
-        base_score = 30  # Start lower - must earn points
         
-        # Add points for response length
-        if quality['avg_length'] >= 30:
-            base_score += 25
-        elif quality['avg_length'] >= 20:
-            base_score += 15
-        elif quality['avg_length'] >= 12:
-            base_score += 8
-        elif quality['avg_length'] < 8:
-            base_score -= 10  # Very short answers = penalty
+        # SPECIAL CASE: No answers at all - give minimum score of 5
+        if questions_answered == 0:
+            print("[Interview Feedback] No answers provided - setting all scores to 5")
+            scores = {
+                'technical_knowledge': 5,
+                'communication': 5,
+                'problem_solving': 5,
+                'professionalism': 5,
+                'enthusiasm': 5,
+                'confidence': 5
+            }
+            overall_score = 5
+            performance_level = "Needs Work"
+            strengths = ["Started the interview process"]
+            improvements = [
+                "Complete the interview by answering questions",
+                "Engage with the interviewer and provide thoughtful responses",
+                "Practice answering common interview questions"
+            ]
+            knowledge_assessment = {
+                "demonstrated_skills": [],
+                "skill_gaps": ["Unable to assess - no responses provided"],
+                "depth_of_knowledge": "unable to assess"
+            }
+            communication_feedback = {
+                "clarity": "Unable to assess - no responses",
+                "structure": "Unable to assess - no responses",
+                "vocabulary": "Unable to assess - no responses"
+            }
+            interviewer_guidance = {
+                "hiring_recommendation": "No Hire",
+                "reasoning": "Candidate did not provide any responses during the interview.",
+                "follow_up_areas": ["Re-interview with full participation required"]
+            }
+            detailed_feedback = "The candidate did not answer any questions during the interview. Unable to provide assessment."
+        else:
+            # Start with base score based on overall engagement
+            base_score = 30  # Start lower - must earn points
         
-        # Add points for technical content
-        tech_bonus = min(25, quality['technical_keywords'] * 4)
-        
-        # Penalty for casual/unprofessional language
-        casual_penalty = min(20, quality['casual_count'] * 6)
-        
-        # Bonus for completing more questions
-        completion_bonus = min(15, questions_answered * 2)
-        
-        scores = {
-            'technical_knowledge': max(10, min(max_score_cap, base_score + tech_bonus)),
-            'communication': max(10, min(max_score_cap, base_score + 5 - casual_penalty)),
-            'problem_solving': max(10, min(max_score_cap, base_score - 5 + tech_bonus // 2)),
-            'professionalism': max(10, min(max_score_cap, base_score - casual_penalty)),
-            'enthusiasm': max(10, min(max_score_cap, base_score + completion_bonus // 2)),
-            'confidence': max(10, min(max_score_cap, base_score))
-        }
-        
-        # Apply early termination penalty
-        if early_termination:
-            penalty = early_termination['penalty']
-            print(f"[Interview Feedback] Fallback - applying penalty: -{penalty}")
+            # Add points for response length
+            if quality['avg_length'] >= 30:
+                base_score += 25
+            elif quality['avg_length'] >= 20:
+                base_score += 15
+            elif quality['avg_length'] >= 12:
+                base_score += 8
+            elif quality['avg_length'] < 8:
+                base_score -= 10  # Very short answers = penalty
+            
+            # Add points for technical content
+            tech_bonus = min(25, quality['technical_keywords'] * 4)
+            
+            # Penalty for casual/unprofessional language
+            casual_penalty = min(20, quality['casual_count'] * 6)
+            
+            # Bonus for completing more questions
+            completion_bonus = min(15, questions_answered * 2)
+            
+            scores = {
+                'technical_knowledge': max(10, min(max_score_cap, base_score + tech_bonus)),
+                'communication': max(10, min(max_score_cap, base_score + 5 - casual_penalty)),
+                'problem_solving': max(10, min(max_score_cap, base_score - 5 + tech_bonus // 2)),
+                'professionalism': max(10, min(max_score_cap, base_score - casual_penalty)),
+                'enthusiasm': max(10, min(max_score_cap, base_score + completion_bonus // 2)),
+                'confidence': max(10, min(max_score_cap, base_score))
+            }
+            
+            # Apply early termination penalty
+            if early_termination:
+                penalty = early_termination['penalty']
+                print(f"[Interview Feedback] Fallback - applying penalty: -{penalty}")
+                for key in scores:
+                    scores[key] = max(5, scores[key] - penalty)  # Minimum 5
+            
+            # Apply max cap
             for key in scores:
-                scores[key] = max(5, scores[key] - penalty)
-        
-        # Apply max cap
-        for key in scores:
-            scores[key] = min(scores[key], max_score_cap)
-        
-        # If no technical keywords, cap technical knowledge very low
-        if quality['technical_keywords'] == 0:
-            scores['technical_knowledge'] = min(scores['technical_knowledge'], 30)
-        
-        overall_score = _calculate_weighted_score(scores)
-        performance_level = _get_performance_level(overall_score)
-        
-        strengths = []
-        improvements = []
-        
-        if quality['avg_length'] > 20:
-            strengths.append("Provided detailed responses to interview questions")
-        if quality['technical_keywords'] > 3:
-            strengths.append("Demonstrated awareness of relevant technical concepts")
-        if quality['casual_count'] < 2:
-            strengths.append("Maintained a professional communication style")
-        if questions_answered >= 5:
-            strengths.append("Engaged thoroughly throughout the interview")
-        if not strengths:
-            strengths.append("Participated in the interview process")
-        
-        if quality['avg_length'] < 15:
-            improvements.append("Provide more detailed and thorough answers")
-        if quality['technical_keywords'] < 3:
-            improvements.append("Include more specific technical details and examples")
-        if quality['casual_count'] > 2:
-            improvements.append("Use more professional language and reduce filler words")
-        if questions_answered < 5:
-            improvements.append("Try to engage more fully and answer more questions")
-        if not improvements:
-            improvements.append("Continue refining communication and technical depth")
-        
-        knowledge_assessment = {
-            "demonstrated_skills": ["Interview participation"],
-            "skill_gaps": ["Unable to fully assess without AI analysis"],
-            "depth_of_knowledge": "moderate" if quality['technical_keywords'] > 3 else "shallow"
-        }
-        communication_feedback = {
-            "clarity": "Good" if quality['avg_length'] > 15 else "Needs improvement - responses were brief",
-            "structure": "Adequate" if quality['avg_length'] > 20 else "Could be more structured",
-            "vocabulary": "Professional" if quality['casual_count'] < 2 else "Could be more formal"
-        }
-        interviewer_guidance = {
-            "hiring_recommendation": "Hire" if overall_score >= 75 else "Maybe" if overall_score >= 55 else "No Hire",
-            "reasoning": f"Candidate scored {overall_score}/100 overall. {'Strong candidate with good potential.' if overall_score >= 70 else 'Needs further evaluation in key areas.'}",
-            "follow_up_areas": ["Technical depth assessment", "Problem-solving with specific scenarios"]
-        }
-        detailed_feedback = f"The candidate completed {questions_answered} questions with an average response length of {quality['avg_length']} words."
+                scores[key] = min(scores[key], max_score_cap)
+            
+            # If no technical keywords, cap technical knowledge very low
+            if quality['technical_keywords'] == 0:
+                scores['technical_knowledge'] = min(scores['technical_knowledge'], 30)
+            
+            overall_score = _calculate_weighted_score(scores)
+            performance_level = _get_performance_level(overall_score)
+            
+            strengths = []
+            improvements = []
+            
+            if quality['avg_length'] > 20:
+                strengths.append("Provided detailed responses to interview questions")
+            if quality['technical_keywords'] > 3:
+                strengths.append("Demonstrated awareness of relevant technical concepts")
+            if quality['casual_count'] < 2:
+                strengths.append("Maintained a professional communication style")
+            if questions_answered >= 5:
+                strengths.append("Engaged thoroughly throughout the interview")
+            if not strengths:
+                strengths.append("Participated in the interview process")
+            
+            if quality['avg_length'] < 15:
+                improvements.append("Provide more detailed and thorough answers")
+            if quality['technical_keywords'] < 3:
+                improvements.append("Include more specific technical details and examples")
+            if quality['casual_count'] > 2:
+                improvements.append("Use more professional language and reduce filler words")
+            if questions_answered < 5:
+                improvements.append("Try to engage more fully and answer more questions")
+            if not improvements:
+                improvements.append("Continue refining communication and technical depth")
+            
+            knowledge_assessment = {
+                "demonstrated_skills": ["Interview participation"],
+                "skill_gaps": ["Unable to fully assess without AI analysis"],
+                "depth_of_knowledge": "moderate" if quality['technical_keywords'] > 3 else "shallow"
+            }
+            communication_feedback = {
+                "clarity": "Good" if quality['avg_length'] > 15 else "Needs improvement - responses were brief",
+                "structure": "Adequate" if quality['avg_length'] > 20 else "Could be more structured",
+                "vocabulary": "Professional" if quality['casual_count'] < 2 else "Could be more formal"
+            }
+            interviewer_guidance = {
+                "hiring_recommendation": "Hire" if overall_score >= 75 else "Maybe" if overall_score >= 55 else "No Hire",
+                "reasoning": f"Candidate scored {overall_score}/100 overall. {'Strong candidate with good potential.' if overall_score >= 70 else 'Needs further evaluation in key areas.'}",
+                "follow_up_areas": ["Technical depth assessment", "Problem-solving with specific scenarios"]
+            }
+            detailed_feedback = f"The candidate completed {questions_answered} questions with an average response length of {quality['avg_length']} words."
     
     scorecard = _generate_scorecard(scores)
     tips = _generate_tips(scores)
