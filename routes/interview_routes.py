@@ -5,7 +5,6 @@ Provides AI interview functionality with smart features:
 - No duplicate questions
 - Conditional compliments (only for good answers)
 - Position-specific questions
-- D-ID talking avatar video generation (optional)
 """
 from flask import Blueprint, request, jsonify, session
 from datetime import datetime
@@ -14,7 +13,6 @@ import json
 import re
 import random
 import requests
-import time
 from utils.db import get_db
 from bson import ObjectId
 
@@ -23,142 +21,19 @@ interview_bp = Blueprint('interview', __name__, url_prefix='/api/interview')
 # Groq API configuration (ULTRA FAST ~200-500ms)
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# ============= D-ID TALKING AVATAR CONFIGURATION =============
-# D-ID API for realistic talking interviewer face
-D_ID_API_URL = "https://api.d-id.com"
-
-# Interviewer image - Professional male in suit (hosted on D-ID compatible CDN)
-# You can replace this with any high-quality face image URL
-INTERVIEWER_IMAGE_URL = "https://create-images-results.d-id.com/DefaultPresenters/Matan_f/image.jpeg"
-
-def get_did_key():
-    """Get D-ID API key from environment"""
-    key = os.getenv('D_ID_API_KEY') or os.getenv('DID_API_KEY') or os.getenv('d_id_api_key')
-    if not key:
-        print("⚠️ D-ID API key not set. Video avatar feature disabled.")
-        print("   Get API key at: https://www.d-id.com/api")
-        print("   Set D_ID_API_KEY in Railway environment variables")
-    return key
-
-# Validate D-ID key at startup
-_did_key = get_did_key()
-if _did_key:
-    print(f"✅ D-ID API key loaded: {_did_key[:8]}...{_did_key[-4:]}")
-else:
-    print("ℹ️ D-ID not configured - using browser TTS only")
-
-def create_did_video(text, voice_id="en-US-GuyNeural"):
-    """
-    Create a talking avatar video using D-ID API
-    
-    Args:
-        text: The text for the avatar to speak
-        voice_id: Microsoft voice ID (en-US-GuyNeural for male)
-    
-    Returns:
-        dict with video_url or error
-    """
-    api_key = get_did_key()
-    if not api_key:
-        return {"success": False, "error": "D-ID API key not configured"}
-    
-    try:
-        # Create talk request
-        headers = {
-            "Authorization": f"Basic {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "source_url": INTERVIEWER_IMAGE_URL,
-            "script": {
-                "type": "text",
-                "input": text,
-                "provider": {
-                    "type": "microsoft",
-                    "voice_id": voice_id
-                }
-            },
-            "config": {
-                "stitch": True,  # Better quality
-                "result_format": "mp4"
-            }
-        }
-        
-        # Create the talk
-        response = requests.post(
-            f"{D_ID_API_URL}/talks",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        
-        if response.status_code != 201:
-            print(f"❌ D-ID create error: {response.status_code} - {response.text}")
-            return {"success": False, "error": f"D-ID API error: {response.status_code}"}
-        
-        talk_data = response.json()
-        talk_id = talk_data.get("id")
-        
-        if not talk_id:
-            return {"success": False, "error": "No talk ID returned"}
-        
-        # Poll for completion (max 30 seconds)
-        max_attempts = 30
-        for attempt in range(max_attempts):
-            time.sleep(1)  # Wait 1 second between polls
-            
-            status_response = requests.get(
-                f"{D_ID_API_URL}/talks/{talk_id}",
-                headers={"Authorization": f"Basic {api_key}"},
-                timeout=10
-            )
-            
-            if status_response.status_code != 200:
-                continue
-            
-            status_data = status_response.json()
-            status = status_data.get("status")
-            
-            if status == "done":
-                video_url = status_data.get("result_url")
-                print(f"✅ D-ID video ready: {video_url[:50]}...")
-                return {
-                    "success": True,
-                    "video_url": video_url,
-                    "duration": status_data.get("duration", 0)
-                }
-            elif status == "error":
-                return {"success": False, "error": "D-ID video generation failed"}
-            
-            # Still processing
-            print(f"⏳ D-ID processing... attempt {attempt + 1}/{max_attempts}")
-        
-        return {"success": False, "error": "D-ID video generation timeout"}
-        
-    except requests.exceptions.Timeout:
-        return {"success": False, "error": "D-ID request timeout"}
-    except Exception as e:
-        print(f"❌ D-ID error: {e}")
-        return {"success": False, "error": str(e)}
-
 def get_groq_key():
     """Get Groq API key from environment"""
-    # Try different possible variable names
-    key = os.getenv('GROQ_API_KEY') or os.getenv('groq_api_key') or os.getenv('GROQ_KEY')
+    key = os.getenv('GROQ_API_KEY')
     if not key:
-        # Debug: print available env vars that contain 'GROQ' or 'API'
-        groq_vars = [k for k in os.environ.keys() if 'GROQ' in k.upper() or 'groq' in k.lower()]
-        print(f"❌ GROQ_API_KEY not found! Available GROQ-related vars: {groq_vars}")
-        print("❌ Get free key at console.groq.com and set GROQ_API_KEY in Railway")
+        print("❌ GROQ_API_KEY not found! Get free key at console.groq.com")
     return key
 
 # Validate key at startup
-_startup_key = get_groq_key()
+_startup_key = os.getenv('GROQ_API_KEY')
 if _startup_key:
     print(f"✅ Groq API key loaded: {_startup_key[:8]}...{_startup_key[-4:]}")
 else:
-    print("❌ WARNING: GROQ_API_KEY not set in Railway environment variables!")
+    print("❌ WARNING: GROQ_API_KEY not set! Get free key at console.groq.com")
 
 # In-memory session storage
 active_sessions = {}
@@ -174,28 +49,13 @@ class InterviewSession:
         self.question_count = 0
         self.conversation_history = []
         self.started_at = datetime.utcnow()
-        self.questions_asked = []  # Track actual question text to avoid duplicates
+        self.questions_asked = []  # Track to avoid duplicates
         self.asked_topics = []  # Track question topics
         self.answers = []
-        self.substantive_answers = []  # Only answers with real content (for scoring)
-        self.last_question_topic = None  # Track what was just asked for answer matching
-        self.quality_scores = []  # Track quality score (0-3) for each answer
-        # Track inappropriate responses
-        self.inappropriate_count = 0  # Abusive/non-English/off-topic responses
-        self.abusive_count = 0  # Abusive language specifically
-        self.non_english_count = 0  # Non-English responses
-        self.off_topic_count = 0  # Off-topic responses
         # Smart features
         self.difficulty_level = 1  # 1=easy, 2=medium, 3=hard
         self.correct_answers = 0
         self.total_questions = 8
-        self.interview_duration_minutes = 30  # Total interview time
-        self.scenario_time_threshold = 20  # Start scenarios after 20 minutes
-        # Follow-up tracking for professional conversation flow
-        self.last_answer_was_vague = False  # Track if we need to follow up
-        self.follow_up_asked = False  # Prevent multiple follow-ups on same topic
-        self.last_good_answer_topic = None  # Track for referencing in later questions
-        self.praise_index = 0  # Rotate through praise phrases
     
     def to_dict(self):
         return {
@@ -209,19 +69,9 @@ class InterviewSession:
             "started_at": self.started_at.isoformat(),
             "questions_asked": self.questions_asked,
             "answers": self.answers,
-            "substantive_answers": self.substantive_answers,
-            "quality_scores": self.quality_scores,
             "difficulty_level": self.difficulty_level,
-            "correct_answers": self.correct_answers,
-            "inappropriate_count": self.inappropriate_count,
-            "abusive_count": self.abusive_count,
-            "non_english_count": self.non_english_count,
-            "off_topic_count": self.off_topic_count
+            "correct_answers": self.correct_answers
         }
-    
-    def get_elapsed_minutes(self):
-        """Get elapsed time since interview started"""
-        return (datetime.utcnow() - self.started_at).total_seconds() / 60
     
     def get_question_pool(self):
         """Get questions organized by difficulty level"""
@@ -293,490 +143,98 @@ class InterviewSession:
         return scenario
     
     def analyze_answer(self, message):
-        """
-        Comprehensive answer analysis with off-topic detection and quality scoring.
-        Returns: {is_casual, is_off_topic, has_substance, quality_score, is_relevant}
-        quality_score: 0=poor/off-topic, 1=vague/minimal, 2=decent, 3=excellent
-        """
+        """Analyze if answer is substantive or casual"""
         msg_lower = message.lower().strip()
-        word_count = len(message.split())
         
-        # === Casual/Social Phrases ===
         casual_phrases = [
             "doing great", "doing good", "i'm good", "i'm fine", "doing fine",
             "good thanks", "fine thanks", "how are you", "what about you",
-            "hello", "hi", "hey", "good morning", "good afternoon", "i'm doing well",
-            "nice to meet", "pleasure to meet", "thank you for asking"
+            "hello", "hi", "hey", "good morning", "good afternoon", "i'm doing well"
         ]
         
-        # === Clarification Requests (user didn't understand the question) ===
-        clarification_phrases = [
-            "what do you mean", "what are you trying to say", "what trying to say",
-            "i don't understand", "i dont understand", "don't understand",
-            "can you explain", "could you explain", "please explain",
-            "can you rephrase", "could you rephrase", "rephrase that",
-            "what does that mean", "what's that mean", "what is that",
-            "come again", "say that again", "repeat that", "repeat please",
-            "sorry what", "sorry?", "what?", "huh?", "pardon",
-            "i didn't get that", "didn't catch that", "didn't understand",
-            "clarify", "be more specific", "what exactly", "meaning of"
-        ]
+        is_casual = any(phrase in msg_lower for phrase in casual_phrases) and len(msg_lower.split()) < 10
+        has_substance = len(message.split()) > 8 and not is_casual
         
-        # Check if user is asking for clarification
-        is_clarification_request = any(phrase in msg_lower for phrase in clarification_phrases)
-        
-        # === Off-Topic/Irrelevant Phrases ===
-        off_topic_phrases = [
-            "weather", "lunch", "dinner", "breakfast", "food", "hungry",
-            "movie", "music", "game", "sports", "cricket", "football", "basketball",
-            "girlfriend", "boyfriend", "dating", "party", "vacation", "holiday",
-            "what time is it", "what day is it", "where are you from",
-            "how old are you", "are you real", "are you a bot", "are you ai",
-            "tell me a joke", "sing a song", "write a poem",
-            "pizza", "burger", "coffee", "tea", "water",
-            "i love you", "that's funny", "lol", "haha", "lmao"
-        ]
-        
-        # === Abusive/Inappropriate Language Detection ===
-        abusive_phrases = [
-            "fuck", "shit", "damn", "ass", "bitch", "bastard", "crap",
-            "idiot", "stupid", "dumb", "hate you", "shut up", "go away",
-            "f**k", "f***", "s**t", "a**", "b**ch", "wtf", "stfu",
-            "screw you", "piss off", "get lost", "you suck", "loser",
-            # Hindi/Hinglish abusive words (multiple spellings)
-            "madarchod", "madarcho", "motherchod", "mc",
-            "bhenchod", "behenchod", "banchod", "benchod", "bc", "bsdk",
-            "chutiya", "chutia", "chodu", "chod", "chodna",
-            "gandu", "gand", "gaand", "gand mara", "gand maro", "gand mar",
-            "harami", "haramkhor", "haraamkhor",
-            "sala", "saala", "sali", "saali",
-            "lund", "lauda", "lawda", "loda",
-            "chut", "bhosdike", "bhosdi", "bhos",
-            "randi", "rand", "raand",
-            "kutte", "kutta", "kamina", "kamine",
-            "ullu", "gadha", "bakchod", "bakchodi"
-        ]
-        
-        # === Non-English Detection (Hindi/other languages) ===
-        # Split message into actual words for proper matching
-        msg_words = set(re.findall(r'\b[a-z]+\b', msg_lower))
-        
-        # Check for non-ASCII characters that indicate non-English text
-        has_devanagari = any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message)
-        has_arabic = any(ord(c) >= 0x0600 and ord(c) <= 0x06FF for c in message)
-        has_chinese = any(ord(c) >= 0x4E00 and ord(c) <= 0x9FFF for c in message)
-        
-        # Common Hindi romanized words - only match FULL WORDS (not substrings)
-        hindi_romanized = {
-            'kya', 'kaise', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi', 
-            'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'kitna', 'accha', 'theek',
-            'teri', 'tera', 'tere', 'meri', 'mera', 'bahut', 'gaya', 'gayi', 'gaye',
-            'maru', 'maro', 'masti', 'bhaiya', 'bhai', 'didi', 'behen', 'abhi', 'kaha',
-            'raha', 'rahi', 'rahe', 'karna', 'karta', 'karti', 'acha', 
-            'lekin', 'matlab', 'samajh', 'dekh', 'dekho', 'suno', 'bata', 'batao',
-            'jao', 'aao', 'chalo', 'ruko', 'bolna', 'bolta', 'nhi', 'kro', 'krna',
-            'btao', 'bolo', 'sunna', 'bolte', 'karte', 'krte'
-        }
-        # Removed short words that cause false positives: 'hai', 'kar', 'aur', 'mere', 'bol', 'chal', 'ruk'
-        
-        # Count how many Hindi words appear as FULL WORDS in message
-        hindi_word_matches = msg_words.intersection(hindi_romanized)
-        
-        # Only flag as non-English if: non-Latin script OR multiple (2+) Hindi words found
-        is_non_english = has_devanagari or has_arabic or has_chinese or len(hindi_word_matches) >= 2
-        
-        if is_non_english and hindi_word_matches:
-            print(f"[Non-English] Detected Hindi words: {hindi_word_matches}")
-        
-        # Check for abusive language
-        is_abusive = any(phrase in msg_lower for phrase in abusive_phrases)
-        
-        # === Negative/Uncertain Indicators ===
-        negative_phrases = [
-            "i don't know", "i dont know", "not sure", "no idea", "can't answer",
-            "cannot answer", "i have no", "never done", "never worked",
-            "i guess", "maybe", "perhaps", "i think so", "probably",
-            "i'm not familiar", "haven't used", "don't have experience",
-            "no experience", "not really", "sorry i", "sorry, i"
-        ]
-        
-        # === Positive/Quality Indicators ===
-        positive_indicators = [
-            "for example", "such as", "specifically", "in particular",
-            "i implemented", "i developed", "i created", "i built", "i designed",
-            "my approach", "my strategy", "my solution", "i solved",
-            "years of experience", "worked on", "contributed to",
-            "led the", "managed the", "responsible for",
-            "using", "with", "through", "by implementing"
-        ]
-        
-        # === Technical Keywords ===
-        technical_keywords = [
-            'algorithm', 'database', 'api', 'framework', 'architecture', 'deploy',
-            'testing', 'agile', 'scrum', 'git', 'docker', 'kubernetes', 'cloud',
-            'aws', 'azure', 'react', 'node', 'python', 'java', 'sql', 'mongodb',
-            'microservice', 'ci/cd', 'optimization', 'performance', 'debug',
-            'machine learning', 'data structure', 'component', 'server', 'client'
-        ]
-        
-        # === Analysis ===
-        is_casual = any(phrase in msg_lower for phrase in casual_phrases) and word_count < 12
-        is_off_topic = any(phrase in msg_lower for phrase in off_topic_phrases) or is_non_english
-        has_negative = any(phrase in msg_lower for phrase in negative_phrases)
-        has_positive = any(phrase in msg_lower for phrase in positive_indicators)
-        tech_count = sum(1 for kw in technical_keywords if kw in msg_lower)
-        
-        # === Check relevance to last question ===
-        is_relevant = True
-        if self.last_question_topic:
-            topic_keywords = self.last_question_topic.lower().split()
-            # Remove common words
-            topic_keywords = [w for w in topic_keywords if len(w) > 3 and w not in ['your', 'about', 'with', 'the', 'and', 'how', 'what', 'when', 'where', 'experience']]
-            # Check if any topic keyword appears in answer
-            has_topic_match = any(kw in msg_lower for kw in topic_keywords)
-            # If question was about specific topic and answer has no relation
-            if not has_topic_match and not has_positive and tech_count == 0:
-                is_relevant = word_count > 15  # Give benefit of doubt for longer answers
-        
-        # === Calculate Quality Score (0-3) ===
-        quality_score = 0
-        
-        if is_off_topic:
-            quality_score = 0
-        elif is_casual:
-            quality_score = 0
-        elif has_negative and word_count < 15:
-            quality_score = 1
-        elif not is_relevant:
-            quality_score = 0
-        else:
-            # Base score on content quality
-            if word_count < 8:
-                quality_score = 1
-            elif word_count < 15:
-                quality_score = 1 if not has_positive else 2
-            elif word_count < 25:
-                quality_score = 2 if has_positive or tech_count > 0 else 1
-            else:
-                # Long answer
-                if has_positive and tech_count >= 2:
-                    quality_score = 3
-                elif has_positive or tech_count >= 1:
-                    quality_score = 2
-                else:
-                    quality_score = 1 if not has_negative else 1
-        
-        # Boost for technical content
-        if tech_count >= 3 and quality_score < 3:
-            quality_score = min(3, quality_score + 1)
-        
-        # Penalize heavy negatives
-        if has_negative and "don't know" in msg_lower:
-            quality_score = min(quality_score, 1)
-        
-        has_substance = quality_score >= 2
-        
-        # Abusive or non-English = quality 0
-        if is_abusive or is_non_english:
-            quality_score = 0
-            has_substance = False
-        
-        return {
-            "is_casual": is_casual,
-            "is_off_topic": is_off_topic,
-            "is_abusive": is_abusive,
-            "is_non_english": is_non_english,
-            "is_clarification_request": is_clarification_request,
-            "has_substance": has_substance,
-            "quality_score": quality_score,
-            "is_relevant": is_relevant,
-            "word_count": word_count,
-            "tech_count": tech_count,
-            "has_negative": has_negative
-        }
+        return {"is_casual": is_casual, "has_substance": has_substance}
 
-
-# Response variety lists for natural conversation
-PRAISE_PHRASES = [
-    "Good point!", "Nice!", "That's helpful.", "Good insight.", 
-    "I see.", "Interesting.", "Makes sense.", "That's useful.",
-    "Good example!", "Thanks for sharing that."
-]
-
-EXCELLENT_PHRASES = [
-    "Excellent!", "Great answer!", "Very impressive!", "That's exactly what I was looking for.",
-    "Great example!", "Well explained!", "That shows strong experience."
-]
-
-ACKNOWLEDGMENT_PHRASES = [
-    "I understand.", "Got it.", "Okay.", "I see.", "Alright."
-]
-
-FOLLOW_UP_PROMPTS = [
-    "Can you give me a specific example?",
-    "Could you elaborate on that?",
-    "What was the outcome?",
-    "Can you walk me through your approach?",
-    "What was your specific role in that?"
-]
 
 def get_smart_system_prompt(session):
     """Generate intelligent system prompt like Groq engine"""
     difficulty_desc = {1: "basic/entry-level", 2: "intermediate", 3: "advanced/senior-level"}.get(session.difficulty_level, "intermediate")
     already_asked = ", ".join(session.asked_topics[-5:]) if session.asked_topics else "none yet"
-    elapsed_minutes = session.get_elapsed_minutes()
-    remaining_questions = session.total_questions - session.question_count
     
-    # Get varied phrases for this response
-    praise_phrase = PRAISE_PHRASES[session.praise_index % len(PRAISE_PHRASES)]
-    excellent_phrase = EXCELLENT_PHRASES[session.praise_index % len(EXCELLENT_PHRASES)]
-    
-    # Time awareness
-    time_context = ""
-    if remaining_questions <= 2:
-        time_context = "\n- WRAPPING UP: Only 1-2 questions left. Consider asking about final thoughts."
-    
-    return f"""You are Alex, a professional and friendly AI interviewer for the {session.position} position.
+    return f"""You are Alex, a professional AI interviewer for the {session.position} position.
 
 CURRENT STATE:
 - Difficulty Level: {session.difficulty_level}/3 ({difficulty_desc})
 - Question #{session.question_count + 1} of {session.total_questions}
-- Time elapsed: {elapsed_minutes:.1f} minutes
-- Already asked about: {already_asked}{time_context}
+- Already asked about: {already_asked}
 
-CRITICAL RULES FOR RESPONSE HANDLING:
+STRICT RULES:
+1. ANALYZE the candidate's response quality:
+   - If answer is RELEVANT and shows understanding → Brief appreciation (1-2 words like "Good!" or "Nice!") + next question
+   - If answer is IRRELEVANT, vague, or off-topic → Skip appreciation, just ask next question directly
+   - If answer is casual/social (like "I'm good", "doing great") → Move to next question without praise
 
-1. CLARIFICATION REQUEST ("what do you mean", "I don't understand", "can you explain"):
-   → Say "Sure, let me rephrase that." + ask SAME question in simpler words with examples.
-   → Example: "Sure, let me rephrase. Have you worked on any data projects? For example, using Excel or Python?"
+2. NEVER repeat a question you already asked (check the "Already asked about" list)
+3. Ask {difficulty_desc} questions appropriate for the current level
+4. Keep total response under 35 words
+5. Ask questions specifically relevant to {session.position}
+6. Never cut off mid-sentence
 
-2. OFF-TOPIC (weather, food, movies, jokes, unrelated):
-   → Say "Let's get back to the interview." + ask next question. NO praise.
-
-3. CASUAL GREETING ("I'm good", "how are you", "what about you"):
-   → Say "Good to hear!" briefly, then redirect to interview question.
-
-4. "I DON'T KNOW" / UNCERTAIN ("not sure", "can't answer", "no idea"):
-   → Say "That's okay, let's try something else." + ask EASIER question. Be supportive.
-
-5. VAGUE BUT RELEVANT (short answer, no examples, no specifics):
-   → Ask a FOLLOW-UP: "Can you give me a specific example?" or "Could you elaborate?"
-   → Only ask ONE follow-up, then move to next topic if still vague.
-
-6. GOOD ANSWER (relevant with some detail):
-   → Use VARIED praise: "{praise_phrase}" then ask next question.
-
-7. EXCELLENT ANSWER (specific examples, technical details, STAR format):
-   → Say "{excellent_phrase}" and reference their answer when asking harder question.
-   → Example: "Great example of problem-solving. Building on that, how would you handle..."
-
-8. BEHAVIORAL QUESTIONS - Use STAR prompting:
-   → If answer lacks specifics, ask: "What was YOUR specific role?" or "What was the outcome?"
-
-CONVERSATION STYLE:
-- Vary your acknowledgments: "I see", "Got it", "Interesting", "Makes sense"
-- Connect questions when possible: "You mentioned X earlier, how does that relate to..."
-- Be encouraging but not over-praising
-- Sound natural, not robotic
-
-NEVER repeat a question you already asked (check "Already asked about" list).
-Ask {difficulty_desc} questions appropriate for current level.
-Keep response under 40 words total.
-Never cut off mid-sentence.
-
-RESPONSE EXAMPLES:
-- Clarification: "Sure, let me rephrase. [Same question in simpler words with example]"
-- Excellent: "{excellent_phrase} Building on that, [harder question]"
-- Good: "{praise_phrase} [Next question]"
-- Vague: "Can you give me a specific example of that?"
-- Off-topic: "Let's get back to the interview. [Next question]"
-- "I don't know": "That's okay. [Easier question]"
-- Casual: "Good to hear! [Redirect to question]"
+RESPONSE FORMAT:
+- Good technical answer: "Good! [Next question about new topic]"
+- Poor/irrelevant answer: "[Next question directly without any praise]"
+- Casual social response: "[Next question directly]"
 """
 
 
 def get_instruction_for_state(session, user_message, answer_analysis):
-    """Get specific instruction based on interview state with quality-aware logic"""
+    """Get specific instruction based on interview state"""
     has_substance = answer_analysis["has_substance"]
     is_casual = answer_analysis["is_casual"]
-    is_off_topic = answer_analysis.get("is_off_topic", False)
-    is_clarification_request = answer_analysis.get("is_clarification_request", False)
-    has_negative = answer_analysis.get("has_negative", False)
-    quality_score = answer_analysis.get("quality_score", 1)
-    word_count = answer_analysis.get("word_count", 0)
-    elapsed_minutes = session.get_elapsed_minutes()
-    remaining_questions = session.total_questions - session.question_count
-    
-    # Get varied phrases
-    praise = PRAISE_PHRASES[session.praise_index % len(PRAISE_PHRASES)]
-    excellent = EXCELLENT_PHRASES[session.praise_index % len(EXCELLENT_PHRASES)]
-    ack = ACKNOWLEDGMENT_PHRASES[session.praise_index % len(ACKNOWLEDGMENT_PHRASES)]
-    follow_up = FOLLOW_UP_PROMPTS[session.praise_index % len(FOLLOW_UP_PROMPTS)]
-    
-    # Increment praise index for variety
-    session.praise_index += 1
-    
-    # Build EXPLICIT analysis summary for AI
-    user_said_summary = f"USER SAID: \"{user_message[:100]}...\"" if len(user_message) > 100 else f"USER SAID: \"{user_message}\""
-    analysis_note = f"ANALYSIS: quality={quality_score}/3, words={word_count}, "
-    if is_clarification_request:
-        analysis_note += "ASKING FOR CLARIFICATION, "
-    if is_off_topic:
-        analysis_note += "OFF-TOPIC (weather/food/unrelated), "
-    if is_casual:
-        analysis_note += "CASUAL/SOCIAL (not interview answer), "
-    if has_negative:
-        analysis_note += "SHOWS UNCERTAINTY, "
-    if quality_score == 0:
-        analysis_note += "POOR/IRRELEVANT. "
-    elif quality_score == 1:
-        analysis_note += "VAGUE/BRIEF - needs follow-up. "
-    elif quality_score == 2:
-        analysis_note += "DECENT - good answer. "
-    else:
-        analysis_note += "EXCELLENT - great detail! "
-    
-    # === HANDLE CLARIFICATION REQUESTS FIRST (before off-topic) ===
-    # User didn't understand the question - rephrase it
-    if is_clarification_request:
-        last_topic = session.last_question_topic or "your experience"
-        return f"{user_said_summary}\\n{analysis_note}User is asking for CLARIFICATION - they didn't understand the question.\\nRESPOND: Say 'Sure, let me rephrase that.' then ask the SAME question about '{last_topic}' in simpler words with an example. For instance: 'Have you worked on any projects involving {last_topic}? For example, using specific tools or in coursework?' Under 40 words."
-    
-    # Track if this answer was vague for follow-up logic
-    is_vague = quality_score == 1 and not is_off_topic and not is_casual and not is_clarification_request and word_count >= 5
-    
-    # Handle "I don't know" / uncertainty - be supportive
-    if has_negative and not is_clarification_request and ("don't know" in user_message.lower() or "not sure" in user_message.lower() or "no idea" in user_message.lower()):
-        question_topic = session.get_next_question_topic()
-        session.last_question_topic = question_topic
-        # Decrease difficulty for easier question
-        if session.difficulty_level > 1:
-            session.difficulty_level -= 1
-        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say \"That's okay, let's try something else.\" then ask an EASIER question about {question_topic}. Be supportive. Under 30 words."
-    
-    # Handle off-topic responses in any state
-    if is_off_topic:
-        question_topic = session.get_next_question_topic()
-        session.last_question_topic = question_topic
-        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Let's get back to the interview.' then ask about {question_topic}. NO praise. Under 30 words."
     
     if session.state == "greeting":
-        # Check if this was actually a greeting or casual chat
-        if is_casual or word_count < 5:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say 'Good to hear!' then ask them to introduce themselves and share their interest in {session.position}. Under 30 words."
-        return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{ack}' then ask them to tell you about themselves and why they're interested in {session.position}. Under 30 words."
+        if is_casual:
+            return f"Skip appreciation. Ask them to introduce themselves and their interest in the {session.position} role. Under 25 words."
+        return f"Briefly acknowledge, then ask them to tell you about themselves and why they're interested in {session.position}. Under 25 words."
     
     elif session.state == "introduction":
         question_topic = session.get_next_question_topic()
-        session.last_question_topic = question_topic  # Track for relevance checking
-        
-        # Check if they actually introduced themselves
-        intro_keywords = ['name is', 'i am', "i'm a", 'my background', 'i have experience', 'i graduated', 'i work', 'i studied', 'years of', 'pursuing', 'studying', 'student', 'engineering', 'degree']
-        has_intro_content = any(kw in user_message.lower() for kw in intro_keywords)
-        
-        if quality_score >= 2 and has_intro_content:
-            session.last_good_answer_topic = "their background"
-            return f"{user_said_summary}\\n{analysis_note}User gave a proper introduction.\\nRESPOND: Say 'Thanks for sharing that!' then ask about {question_topic}. Under 30 words."
-        elif is_casual or not has_intro_content:
-            return f"{user_said_summary}\\n{analysis_note}User did NOT actually introduce themselves.\\nRESPOND: Say 'I'd like to know more about you.' then ask about their background and experience relevant to {session.position}. Under 30 words."
+        if has_substance:
+            return f"Say 'Thanks!' briefly, then ask about {question_topic}. Under 30 words."
         else:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{ack}' and ask about {question_topic}. Under 30 words."
+            return f"Ask about {question_topic} directly without praise. Under 25 words."
     
     elif session.state == "interviewing":
-        # TIME-BASED scenario trigger (after 20 minutes) OR count-based (last 2 questions)
-        should_do_scenario = (elapsed_minutes >= session.scenario_time_threshold) or (session.question_count >= session.total_questions - 2)
-        
-        if should_do_scenario and session.question_count < session.total_questions:
+        # Check if time for scenario questions (last 2 questions)
+        if session.question_count >= session.total_questions - 2:
             scenario_topic = session.get_scenario_topic()
-            session.last_question_topic = scenario_topic
-            if quality_score >= 2:
-                return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{praise}' then present this scenario: {scenario_topic}. Under 45 words total."
+            if has_substance:
+                return f"Say 'Good!' then present this scenario: {scenario_topic}. Under 45 words total."
             else:
-                return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Present this scenario directly: {scenario_topic}. NO praise. Under 40 words."
+                return f"Present this scenario directly: {scenario_topic}. Under 40 words."
         
-        # Check if time to close / wrapping up
+        # Check if time to close
         if session.question_count >= session.total_questions:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Thank them warmly for the conversation and ask if they have any questions for you. Under 25 words."
-        
-        # WRAPPING UP - last 1-2 questions
-        if remaining_questions <= 2 and quality_score >= 2:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{praise}' then say 'We're wrapping up. Any final thoughts on why you'd be a great fit for this {session.position} role?' Under 35 words."
-        
-        # === FOLLOW-UP LOGIC for vague answers ===
-        # If answer was vague and we haven't asked follow-up yet, probe deeper
-        if is_vague and not session.follow_up_asked and session.last_question_topic:
-            session.follow_up_asked = True
-            session.last_answer_was_vague = True
-            # Use STAR prompting for behavioral questions
-            if any(word in session.last_question_topic.lower() for word in ['challenge', 'problem', 'conflict', 'difficult', 'team', 'project']):
-                return f"{user_said_summary}\\n{analysis_note}Answer is vague - use STAR prompting.\\nRESPOND: Ask '{follow_up}' to get more specifics. Under 20 words."
-            else:
-                return f"{user_said_summary}\\n{analysis_note}Answer is vague - ask for elaboration.\\nRESPOND: Say 'Can you give me a specific example?' Under 15 words."
-        
-        # Reset follow-up tracking when moving to new topic
-        session.follow_up_asked = False
-        session.last_answer_was_vague = False
+            return "Thank them warmly and ask if they have any questions for you. Under 20 words."
         
         # Get next question based on difficulty
         question_topic = session.get_next_question_topic()
-        session.last_question_topic = question_topic  # Track for relevance checking
-        
-        # Quality-aware response with VARIETY
-        if quality_score >= 3:
-            session.last_good_answer_topic = question_topic
-            # Reference their excellent answer
-            return f"{user_said_summary}\\n{analysis_note}EXCELLENT answer!\\nRESPOND: Say '{excellent}' and connect to next question: 'Building on that, {question_topic}?' Under 35 words."
-        elif quality_score == 2:
-            session.last_good_answer_topic = question_topic
-            return f"{user_said_summary}\\n{analysis_note}Good answer.\\nRESPOND: Say '{praise}' then ask about {question_topic}. Under 30 words."
-        elif is_casual:
-            return f"{user_said_summary}\\n{analysis_note}Casual response.\\nRESPOND: Say 'Good to hear!' then ask about {question_topic}. Under 30 words."
+        if has_substance:
+            return f"Say 'Good!' or 'Nice!' (1-2 words), then ask about {question_topic}. Under 30 words total."
         else:
-            # Poor/vague answer after follow-up - just move on
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Say '{ack}' and ask about {question_topic}. Under 30 words."
+            return f"Ask about {question_topic} directly without any appreciation. Under 25 words."
     
     elif session.state == "closing":
-        # Personalized closing based on interview quality
-        avg_score = sum(session.quality_scores) / len(session.quality_scores) if session.quality_scores else 1
-        if avg_score >= 2:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Give a warm, positive closing. Say you enjoyed the conversation and wish them the best. Under 25 words."
-        else:
-            return f"{user_said_summary}\\n{analysis_note}\\nRESPOND: Give a professional closing. Thank them for their time and wish them luck. Under 20 words."
+        return "Give a warm closing, thank them for their time, wish them luck. Under 20 words."
     
     return "Respond naturally and professionally as Alex the interviewer."
 
 
-def get_direct_question(session, repeat_last=True):
-    """Get a direct question without calling AI - for handling inappropriate responses
-    If repeat_last=True, re-ask the last question (for bad responses)
-    If repeat_last=False, get next question
-    """
-    if session.state == "greeting":
-        return f"Could you please introduce yourself and tell me about your interest in the {session.position} role?"
-    elif session.state == "introduction":
-        # For introduction, ask them to introduce themselves again
-        return f"Please tell me about yourself and your background relevant to {session.position}."
-    elif session.state == "interviewing":
-        # Re-ask the SAME question if they didn't answer properly
-        if repeat_last and session.last_question_topic:
-            return f"Can you please answer: {session.last_question_topic}?"
-        else:
-            topic = session.get_next_question_topic()
-            session.last_question_topic = topic
-            return f"Can you tell me about {topic}?"
-    else:
-        return "Do you have any questions for me?"
-
-
 def update_session_state(session, answer_analysis):
-    """Update interview state and difficulty based on answer quality score"""
-    quality_score = answer_analysis.get("quality_score", 1)
-    is_off_topic = answer_analysis.get("is_off_topic", False)
-    has_negative = answer_analysis.get("has_negative", False)
-    word_count = answer_analysis.get("word_count", 0)
-    
-    # Track quality score
-    session.quality_scores.append(quality_score)
+    """Update interview state and difficulty based on answer quality"""
+    has_substance = answer_analysis["has_substance"]
     
     if session.state == "greeting":
         session.state = "introduction"
@@ -788,32 +246,13 @@ def update_session_state(session, answer_analysis):
     elif session.state == "interviewing":
         session.question_count += 1
         
-        # === PROGRESSIVE DIFFICULTY ADJUSTMENT ===
-        # Increase difficulty for good answers (quality_score >= 2 AND decent length)
-        if quality_score >= 2 and not is_off_topic and word_count >= 15:
+        # Increase difficulty if answer was good
+        if has_substance:
             session.correct_answers += 1
-            print(f"✅ Good answer #{session.correct_answers} (quality={quality_score}, words={word_count})")
-            
-            # Increase difficulty every 2 good answers (faster progression)
-            if session.correct_answers >= 2 and session.difficulty_level < 3:
-                if session.correct_answers % 2 == 0:
-                    session.difficulty_level += 1
-                    print(f"⬆️ Difficulty increased to level {session.difficulty_level}/3")
-        
-        # EXCELLENT answer (quality 3 with good length) - immediate difficulty increase
-        elif quality_score >= 3 and word_count >= 25:
-            session.correct_answers += 2  # Counts as 2 good answers
-            print(f"🌟 Excellent answer! (quality={quality_score}, words={word_count})")
-            if session.difficulty_level < 3:
+            # Increase difficulty every 2 good answers
+            if session.correct_answers % 2 == 0 and session.difficulty_level < 3:
                 session.difficulty_level += 1
-                print(f"⬆️ Difficulty increased to level {session.difficulty_level}/3 (excellent answer)")
-        
-        # DECREASE difficulty if struggling (multiple poor answers in a row)
-        recent_scores = session.quality_scores[-3:] if len(session.quality_scores) >= 3 else session.quality_scores
-        if len(recent_scores) >= 3 and all(s <= 1 for s in recent_scores):
-            if session.difficulty_level > 1:
-                session.difficulty_level -= 1
-                print(f"⬇️ Difficulty decreased to level {session.difficulty_level}/3 (struggling)")
+                print(f"⬆️ Difficulty increased to level {session.difficulty_level}")
         
         # Check if time to close
         if session.question_count >= session.total_questions:
@@ -862,7 +301,7 @@ def process_response():
     try:
         data = request.get_json()
         session_id = data.get('session_id')
-        user_message = data.get('message', '').strip()
+        user_message = data.get('message', '')
         
         # Get session
         if session_id not in active_sessions:
@@ -874,95 +313,8 @@ def process_response():
         
         interview_session = active_sessions[session_id]
         
-        # === Handle empty/silence responses ===
-        if not user_message or len(user_message) < 3:
-            # Treat as "no response" - prompt them to answer
-            return jsonify({
-                "success": True,
-                "message": "I didn't catch that. Could you please repeat your answer?",
-                "state": interview_session.state,
-                "question_count": interview_session.question_count,
-                "difficulty_level": interview_session.difficulty_level,
-                "should_speak": True,
-                "was_empty": True
-            })
-        
-        # Analyze user's answer quality (comprehensive analysis)
+        # Analyze user's answer quality
         answer_analysis = interview_session.analyze_answer(user_message)
-        
-        # Log analysis for debugging
-        print(f"📊 Answer Analysis: quality={answer_analysis['quality_score']}, "
-              f"off_topic={answer_analysis['is_off_topic']}, "
-              f"casual={answer_analysis['is_casual']}, "
-              f"abusive={answer_analysis.get('is_abusive', False)}, "
-              f"non_english={answer_analysis.get('is_non_english', False)}, "
-              f"tech_count={answer_analysis['tech_count']}")
-        
-        # === DIRECT HANDLING: Abusive language - don't even call AI ===
-        if answer_analysis.get('is_abusive', False):
-            # Track inappropriate response
-            interview_session.inappropriate_count += 1
-            interview_session.abusive_count += 1
-            # Re-ask the SAME question, don't advance state
-            warning_response = "Please maintain professional language. " + get_direct_question(interview_session, repeat_last=True)
-            interview_session.conversation_history.append({"role": "user", "content": user_message})
-            interview_session.conversation_history.append({"role": "assistant", "content": warning_response})
-            # Don't add to answers, don't update state - just re-ask
-            interview_session.quality_scores.append(0)
-            
-            return jsonify({
-                "success": True,
-                "message": warning_response,
-                "state": interview_session.state,
-                "question_count": interview_session.question_count,
-                "difficulty_level": interview_session.difficulty_level,
-                "should_speak": True,
-                "was_inappropriate": True
-            })
-        
-        # === DIRECT HANDLING: Non-English response ===
-        if answer_analysis.get('is_non_english', False):
-            # Track inappropriate response
-            interview_session.inappropriate_count += 1
-            interview_session.non_english_count += 1
-            # Re-ask the SAME question, don't advance state
-            english_response = "Please respond in English. " + get_direct_question(interview_session, repeat_last=True)
-            interview_session.conversation_history.append({"role": "user", "content": user_message})
-            interview_session.conversation_history.append({"role": "assistant", "content": english_response})
-            # Don't add to answers, don't update state - just re-ask
-            interview_session.quality_scores.append(0)
-            
-            return jsonify({
-                "success": True,
-                "message": english_response,
-                "state": interview_session.state,
-                "question_count": interview_session.question_count,
-                "difficulty_level": interview_session.difficulty_level,
-                "should_speak": True,
-                "was_non_english": True
-            })
-        
-        # === DIRECT HANDLING: Clearly off-topic (weather, movies, jokes, etc.) ===
-        if answer_analysis.get('is_off_topic', False):
-            # Track inappropriate response
-            interview_session.inappropriate_count += 1
-            interview_session.off_topic_count += 1
-            # Re-ask the SAME question, don't advance state
-            offtopic_response = "Let's focus on the interview. " + get_direct_question(interview_session, repeat_last=True)
-            interview_session.conversation_history.append({"role": "user", "content": user_message})
-            interview_session.conversation_history.append({"role": "assistant", "content": offtopic_response})
-            # Don't add to answers, don't update state - just re-ask
-            interview_session.quality_scores.append(0)
-            
-            return jsonify({
-                "success": True,
-                "message": offtopic_response,
-                "state": interview_session.state,
-                "question_count": interview_session.question_count,
-                "difficulty_level": interview_session.difficulty_level,
-                "should_speak": True,
-                "was_off_topic": True
-            })
         
         # Add user message to history
         interview_session.conversation_history.append({
@@ -970,10 +322,6 @@ def process_response():
             "content": user_message
         })
         interview_session.answers.append(user_message)
-        
-        # === Track substantive answers separately (for accurate scoring) ===
-        if answer_analysis["quality_score"] >= 2 and not answer_analysis["is_off_topic"]:
-            interview_session.substantive_answers.append(user_message)
         
         # Generate smart system prompt and instruction
         system_prompt = get_smart_system_prompt(interview_session)
@@ -1130,6 +478,117 @@ def end_interview():
             "success": False,
             "error": str(e)
         }), 500
+
+
+# ============= GROQ WHISPER SPEECH-TO-TEXT =============
+# Ultra-fast transcription using Groq's Whisper API (~200-500ms)
+
+GROQ_AUDIO_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+
+@interview_bp.route('/transcribe', methods=['POST'])
+def transcribe_audio():
+    """
+    Transcribe audio using Groq's Whisper API (ULTRA FAST ~200-500ms)
+    Accepts audio file via multipart/form-data
+    
+    Returns:
+        JSON with transcribed text and confidence
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        # Check if audio file was sent
+        if 'audio' not in request.files:
+            return jsonify({
+                "success": False,
+                "error": "No audio file provided"
+            }), 400
+        
+        audio_file = request.files['audio']
+        
+        if audio_file.filename == '':
+            return jsonify({
+                "success": False,
+                "error": "Empty filename"
+            }), 400
+        
+        # Get Groq API key
+        api_key = get_groq_key()
+        if not api_key:
+            return jsonify({
+                "success": False,
+                "error": "Groq API key not configured"
+            }), 500
+        
+        # Read audio file content
+        audio_content = audio_file.read()
+        
+        # Determine file extension
+        filename = audio_file.filename or 'audio.webm'
+        if not filename.endswith(('.webm', '.mp3', '.wav', '.m4a', '.ogg', '.flac')):
+            filename = 'audio.webm'  # Default for browser recordings
+        
+        # Call Groq Whisper API
+        import io
+        files = {
+            'file': (filename, io.BytesIO(audio_content), audio_file.content_type or 'audio/webm')
+        }
+        data = {
+            'model': 'whisper-large-v3-turbo',  # Fastest model
+            'language': 'en',
+            'response_format': 'json'
+        }
+        headers = {
+            'Authorization': f'Bearer {api_key}'
+        }
+        
+        response = requests.post(
+            GROQ_AUDIO_API_URL,
+            headers=headers,
+            files=files,
+            data=data,
+            timeout=30
+        )
+        
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        
+        if response.status_code == 200:
+            result = response.json()
+            transcript = result.get('text', '').strip()
+            
+            print(f"🎤 Groq Whisper transcribed in {elapsed_ms}ms: '{transcript[:50]}...'")
+            
+            return jsonify({
+                "success": True,
+                "text": transcript,
+                "confidence": 0.95,  # Groq doesn't return confidence, assume high
+                "duration_ms": elapsed_ms,
+                "model": "whisper-large-v3-turbo"
+            })
+        else:
+            error_msg = response.text[:200]
+            print(f"❌ Groq Whisper error ({response.status_code}): {error_msg}")
+            return jsonify({
+                "success": False,
+                "error": f"Transcription failed: {error_msg}"
+            }), response.status_code
+    
+    except requests.Timeout:
+        return jsonify({
+            "success": False,
+            "error": "Transcription timed out"
+        }), 504
+    
+    except Exception as e:
+        print(f"❌ Transcription error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 
 @interview_bp.route('/history/<phone_number>', methods=['GET'])
 def get_interview_history(phone_number):
@@ -1461,96 +920,35 @@ def _generate_tips(scores):
 
 
 def generate_interview_feedback(session):
-    """Generate comprehensive AI-powered feedback for completed interview using Groq"""
+    """Generate comprehensive AI-powered feedback for completed interview"""
     
     duration_minutes = round((datetime.utcnow() - session.started_at).total_seconds() / 60, 1)
     questions_answered = len(session.answers)
+    quality = _analyze_response_quality(session.answers)
     
-    # Use SUBSTANTIVE answers for quality analysis (excludes casual/off-topic)
-    substantive_count = len(session.substantive_answers)
-    quality = _analyze_response_quality(session.substantive_answers if session.substantive_answers else session.answers)
-    
-    # Add substantive_answers to quality dict for ratio calculation
-    quality['substantive_answers'] = session.substantive_answers
-    
-    # Calculate average quality score from tracked scores
-    avg_quality_score = sum(session.quality_scores) / len(session.quality_scores) if session.quality_scores else 0
-    
-    # Count technical discussion (quality >= 2 means actual technical content)
-    technical_responses = sum(1 for s in session.quality_scores if s >= 2)
-    
-    print(f"[Feedback] Duration: {duration_minutes:.1f}min, Total answers: {questions_answered}, Substantive: {substantive_count}, Technical: {technical_responses}, Avg quality: {avg_quality_score:.1f}")
-    
-    # === STRICT EARLY TERMINATION / NO EFFORT DETECTION ===
+    # Check for early termination
     early_termination = None
-    max_score_cap = 100  # Default no cap
-    
-    # NO ANSWERS - user exited immediately without responding
-    if questions_answered == 0:
-        early_termination = {
-            "detected": True,
-            "severity": "critical",
-            "message": "Interview not completed. No responses were provided.",
-            "penalty": 0  # No penalty needed - we set specific scores below
-        }
-        max_score_cap = 15  # Cap all scores at 15 for no-answer interviews
-    
-    # VERY early termination (< 2 min OR < 2 questions) - SEVERE penalty
-    elif duration_minutes < 2 or questions_answered < 2:
-        early_termination = {
-            "detected": True,
-            "severity": "critical",
-            "message": "Interview ended extremely early. Unable to properly assess candidate.",
-            "penalty": 50
-        }
-        max_score_cap = 30  # Cap all scores at 30
-    
-    # Early termination (< 5 min OR < 4 questions)
-    elif duration_minutes < 5 or questions_answered < 4:
+    if questions_answered < 3:
         early_termination = {
             "detected": True,
             "severity": "high",
-            "message": "Interview ended early with insufficient questions to assess skills.",
-            "penalty": 35
+            "message": "Interview ended very early with fewer than 3 questions answered.",
+            "penalty": 30
         }
-        max_score_cap = 45  # Cap all scores at 45
-    
-    # Short interview (< 8 min OR < 6 questions)
-    elif duration_minutes < 8 or questions_answered < 6:
+    elif questions_answered < 5 and duration_minutes < 3:
         early_termination = {
             "detected": True,
             "severity": "medium", 
-            "message": "Interview was shorter than recommended. More questions would better demonstrate skills.",
-            "penalty": 20
+            "message": "Interview was shorter than typical. More questions could demonstrate skills better.",
+            "penalty": 15
         }
-        max_score_cap = 65  # Cap all scores at 65
     
-    # NO TECHNICAL DISCUSSION - user never gave technical answers
-    if technical_responses == 0 and questions_answered >= 2:
-        early_termination = {
-            "detected": True,
-            "severity": "critical",
-            "message": "No technical or substantive discussion occurred during the interview.",
-            "penalty": 45
-        }
-        max_score_cap = min(max_score_cap, 35)  # Cap at 35 if no technical
-    
-    # Check for mostly casual/off-topic responses
-    elif substantive_count < max(1, questions_answered * 0.3):  # Less than 30% substantive
-        early_termination = {
-            "detected": True,
-            "severity": "high",
-            "message": "Most responses were off-topic, casual, or lacked substance.",
-            "penalty": 40
-        }
-        max_score_cap = min(max_score_cap, 40)
-    
-    # Try AI-powered analysis using GROQ (instead of Perplexity)
+    # Try AI-powered analysis using Perplexity
     ai_analysis = None
     try:
-        api_key = get_groq_key()
+        api_key = get_perplexity_key()
         if api_key and session.conversation_history:
-            # Build conversation summary (only substantive parts)
+            # Build conversation summary
             conv_text = ""
             for msg in session.conversation_history:
                 role = "Interviewer" if msg['role'] == 'assistant' else "Candidate"
@@ -1561,65 +959,75 @@ def generate_interview_feedback(session):
 INTERVIEW TRANSCRIPT:
 {conv_text}
 
-CANDIDATE METRICS:
+CANDIDATE INFO:
 - Name: {session.user_name}
 - Position: {session.position}
-- Total responses: {questions_answered}
-- Substantive responses: {substantive_count}
-- Average quality score: {avg_quality_score:.1f}/3
+- Questions answered: {questions_answered}
 - Average response length: {quality['avg_length']} words
 - Technical keywords used: {quality['technical_keywords']}
-- Casual/filler phrases: {quality['casual_count']}
-- INAPPROPRIATE RESPONSES: {session.inappropriate_count} total ({session.abusive_count} abusive, {session.non_english_count} non-English, {session.off_topic_count} off-topic)
 
-CRITICAL SCORING RULES:
-1. If ANY abusive language was used, professionalism MUST be 20 or below
-2. If multiple inappropriate responses ({session.inappropriate_count}), communication should be LOW (20-40)
-3. If most responses were off-topic/casual (substantive < 50%), scores should be LOW (20-40)
-4. If candidate said "I don't know" frequently, technical_knowledge should be LOW
-5. Short vague answers = LOW scores (30-50)
-6. Only give 70+ for specific examples and demonstrated knowledge
-7. Only give 85+ for exceptional detail with real project examples
+Provide a STRICT and HONEST evaluation. Do NOT inflate scores. Score based on ACTUAL content quality.
 
-⚠️ CRITICAL: ALL scores MUST be on a 0-100 scale (NOT 1-10). A mediocre response = 50, good = 70, excellent = 85+.
+⚠️ CRITICAL: ALL scores MUST be on a 0-100 scale (NOT 1-10). 
+Example: An average/mediocre response = 50, a good response = 70, excellent = 85+.
+DO NOT use single digit scores like 5 or 7. Use proper 0-100 values.
 
-SCORING RUBRIC (0-100 scale - use full range):
-- technical_knowledge: 0-30=vague/wrong, 31-50=minimal understanding, 51-70=basic knowledge, 71-85=good with examples, 86-100=expert
-- communication: 0-30=unclear/inappropriate, 31-50=understandable but unstructured, 51-70=clear, 71-85=well-structured, 86-100=excellent STAR method
-- problem_solving: 0-30=no analysis, 31-50=basic, 51-70=some approach, 71-85=structured, 86-100=systematic with trade-offs
-- professionalism: 0-30=inappropriate/abusive, 31-50=casual, 51-70=professional, 71-85=polished, 86-100=exemplary
-- enthusiasm: 0-30=disinterested, 31-50=neutral, 51-70=interested, 71-85=eager, 86-100=genuinely passionate
-- confidence: 0-30=very unsure, 31-50=hesitant, 51-70=confident, 71-85=assured, 86-100=poised
+SCORING RUBRIC (0-100 for each category):
+- technical_knowledge: Technical understanding demonstrated (15-30: vague/incorrect, 35-55: basic understanding, 60-75: good knowledge with examples, 80-95: expert level with specific technical depth)
+- communication: Expression clarity (15-30: unclear/rambling, 35-55: understandable but basic, 60-75: clear and well-structured, 80-95: excellent articulation using STAR method)
+- problem_solving: Analytical thinking shown (15-30: no analysis visible, 35-55: basic approach mentioned, 60-75: structured logical thinking, 80-95: systematic with trade-off analysis)
+- professionalism: Professional demeanor (15-30: too casual/unprepared, 35-55: adequate professionalism, 60-75: professional responses, 80-95: exemplary workplace readiness)
+- enthusiasm: Interest in the role (15-30: seems disinterested, 35-55: neutral tone, 60-75: clearly interested, 80-95: genuinely passionate and eager)
+- confidence: Self-assurance level (15-30: very unsure/hesitant, 35-55: somewhat confident, 60-75: confident delivery, 80-95: poised and assured throughout)
 
-Respond ONLY with this JSON (no markdown, no explanation):
+You MUST respond in EXACTLY this JSON format (no other text):
 {{
-  "scores": {{"technical_knowledge": <num>, "communication": <num>, "problem_solving": <num>, "professionalism": <num>, "enthusiasm": <num>, "confidence": <num>}},
+  "scores": {{
+    "technical_knowledge": <number>,
+    "communication": <number>,
+    "problem_solving": <number>,
+    "professionalism": <number>,
+    "enthusiasm": <number>,
+    "confidence": <number>
+  }},
   "strengths": ["<strength1>", "<strength2>", "<strength3>"],
   "improvements": ["<improvement1>", "<improvement2>", "<improvement3>"],
-  "knowledge_assessment": {{"demonstrated_skills": ["<skill1>"], "skill_gaps": ["<gap1>"], "depth_of_knowledge": "<shallow/moderate/deep>"}},
-  "communication_feedback": {{"clarity": "<assessment>", "structure": "<assessment>", "vocabulary": "<assessment>"}},
-  "interviewer_guidance": {{"hiring_recommendation": "<Strong Hire/Hire/Maybe/No Hire>", "reasoning": "<explanation>", "follow_up_areas": ["<area1>"]}},
-  "detailed_feedback": "<2-3 sentence assessment>"
+  "knowledge_assessment": {{
+    "demonstrated_skills": ["<skill1>", "<skill2>"],
+    "skill_gaps": ["<gap1>", "<gap2>"],
+    "depth_of_knowledge": "<shallow/moderate/deep>"
+  }},
+  "communication_feedback": {{
+    "clarity": "<brief assessment>",
+    "structure": "<brief assessment>",
+    "vocabulary": "<brief assessment>"
+  }},
+  "interviewer_guidance": {{
+    "hiring_recommendation": "<Strong Hire/Hire/Maybe/No Hire>",
+    "reasoning": "<1-2 sentence explanation>",
+    "follow_up_areas": ["<area1>", "<area2>"]
+  }},
+  "detailed_feedback": "<2-3 sentence overall assessment>"
 }}"""
 
-            print(f"[Interview Feedback] Calling GROQ API for analysis...")
+            print(f"[Interview Feedback] Calling Perplexity API for analysis...")
             
             response = requests.post(
-                GROQ_API_URL,
+                PERPLEXITY_API_URL,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "llama-3.1-8b-instant",
+                    "model": "sonar",
                     "messages": [
-                        {"role": "system", "content": "You are an expert interview evaluator. Respond ONLY with valid JSON, no markdown, no code blocks."},
+                        {"role": "system", "content": "You are an expert interview evaluator. Respond ONLY with valid JSON, no markdown, no code blocks, no explanation."},
                         {"role": "user", "content": analysis_prompt}
                     ],
                     "temperature": 0.3,
                     "max_tokens": 1000
                 },
-                timeout=30
+                timeout=45
             )
             
             if response.status_code == 200:
@@ -1634,14 +1042,15 @@ Respond ONLY with this JSON (no markdown, no explanation):
                 ai_text = ai_text.strip()
                 
                 # Try to extract JSON from the response
+                import re
                 json_match = re.search(r'\{[\s\S]*\}', ai_text)
                 if json_match:
                     ai_analysis = json.loads(json_match.group())
-                    print(f"[Interview Feedback] GROQ analysis successful: scores={ai_analysis.get('scores', {})}")
+                    print(f"[Interview Feedback] AI analysis successful: scores={ai_analysis.get('scores', {})}")
                 else:
                     print(f"[Interview Feedback] Could not find JSON in AI response: {ai_text[:200]}")
             else:
-                print(f"[Interview Feedback] GROQ API error: {response.status_code}")
+                print(f"[Interview Feedback] Perplexity API error: {response.status_code}")
                 
     except Exception as e:
         print(f"[Interview Feedback] AI analysis failed: {e}")
@@ -1652,10 +1061,11 @@ Respond ONLY with this JSON (no markdown, no explanation):
     if ai_analysis and 'scores' in ai_analysis:
         scores = ai_analysis['scores']
         
-        # Auto-detect if AI returned scores on 1-10 scale instead of 0-100
-        score_values = [int(v) for v in scores.values() if isinstance(v, (int, float, str)) and str(v).isdigit()]
+        # FIX: Auto-detect if AI returned 1-10 scale instead of 0-100
+        # If all scores are <= 10, multiply by 10 to convert to 0-100 scale
+        score_values = [int(v) for v in scores.values() if isinstance(v, (int, float))]
         if score_values and all(v <= 10 for v in score_values):
-            print(f"[Interview Feedback] Detected 1-10 scale scores, converting to 0-100: {scores}")
+            print(f"[Interview Feedback] Detected 1-10 scale, converting to 0-100: {scores}")
             for key in scores:
                 scores[key] = int(scores[key]) * 10
             print(f"[Interview Feedback] Converted scores: {scores}")
@@ -1664,86 +1074,22 @@ Respond ONLY with this JSON (no markdown, no explanation):
         for key in scores:
             scores[key] = max(0, min(100, int(scores[key])))
         
-        # === APPLY MAXIMUM SCORE CAP (based on interview quality) ===
-        print(f"[Interview Feedback] Max score cap: {max_score_cap}")
-        for key in scores:
-            scores[key] = min(scores[key], max_score_cap)
-        
-        # Apply early termination penalty on top of cap
+        # Apply early termination penalty
         if early_termination:
             penalty = early_termination['penalty']
-            print(f"[Interview Feedback] Applying early termination penalty: -{penalty}")
             for key in scores:
-                scores[key] = max(5, scores[key] - penalty)
+                scores[key] = max(10, scores[key] - penalty)
         
-        # === ADJUST BASED ON RESPONSE QUALITY ===
-        # Very short answers = low scores
-        if quality['avg_length'] < 8:
-            print(f"[Interview Feedback] Very short avg response ({quality['avg_length']} words) - capping at 35")
+        # Adjust based on response quality
+        if quality['avg_length'] < 10:
             for key in scores:
-                scores[key] = min(scores[key], 35)
-        elif quality['avg_length'] < 15:
-            print(f"[Interview Feedback] Short avg response ({quality['avg_length']} words) - capping at 50")
-            for key in scores:
-                scores[key] = min(scores[key], 50)
-        elif quality['avg_length'] < 25:
-            print(f"[Interview Feedback] Moderate avg response ({quality['avg_length']} words) - capping at 70")
-            for key in scores:
-                scores[key] = min(scores[key], 70)
-        
-        # === SPECIFIC CATEGORY ADJUSTMENTS ===
-        # Technical knowledge based on actual technical content
-        if quality['technical_keywords'] < 2:
-            print(f"[Interview Feedback] Low technical keywords ({quality['technical_keywords']}) - capping technical_knowledge at 40")
-            scores['technical_knowledge'] = min(scores['technical_knowledge'], 40)
-        elif quality['technical_keywords'] < 5:
-            scores['technical_knowledge'] = min(scores['technical_knowledge'], 60)
-        
-        # Communication based on casual phrases
-        if quality['casual_count'] > 5:
-            scores['communication'] = min(scores['communication'], 40)
-            scores['professionalism'] = min(scores['professionalism'], 45)
-        elif quality['casual_count'] > 3:
-            scores['communication'] = min(scores['communication'], 55)
-            scores['professionalism'] = min(scores['professionalism'], 55)
-        
-        # === CRITICAL: Penalize for inappropriate behavior ===
-        if session.abusive_count > 0:
-            print(f"[Interview Feedback] ABUSIVE behavior detected ({session.abusive_count}x) - capping professionalism at 15")
-            scores['professionalism'] = min(scores['professionalism'], 15)
-            scores['communication'] = min(scores['communication'], 30)
-            scores['confidence'] = min(scores['confidence'], 35)
-        
-        if session.inappropriate_count > 2:
-            print(f"[Interview Feedback] Multiple inappropriate responses ({session.inappropriate_count}) - reducing scores")
-            scores['communication'] = min(scores['communication'], 35)
-            scores['professionalism'] = min(scores['professionalism'], 35)
-        
-        if session.off_topic_count > 3:
-            print(f"[Interview Feedback] Many off-topic responses ({session.off_topic_count}) - capping scores")
-            scores['communication'] = min(scores['communication'], 40)
-            scores['enthusiasm'] = min(scores['enthusiasm'], 40)
-        
-        # === CRITICAL: Cap scores based on substantive answer ratio ===
-        total_responses = questions_answered if questions_answered > 0 else 1
-        substantive_ratio = len(quality.get('substantive_answers', [])) / max(1, total_responses)
-        print(f"[Interview Feedback] Substantive ratio: {substantive_ratio:.2f} ({len(quality.get('substantive_answers', []))}/{total_responses})")
-        
-        if substantive_ratio < 0.2:
-            # Less than 20% good answers - cap all scores at 35
-            print(f"[Interview Feedback] VERY LOW substantive ratio - capping all scores at 35")
-            for key in scores:
-                scores[key] = min(scores[key], 35)
-        elif substantive_ratio < 0.4:
-            # Less than 40% good answers - cap all scores at 50
-            print(f"[Interview Feedback] LOW substantive ratio - capping all scores at 50")
-            for key in scores:
-                scores[key] = min(scores[key], 50)
-        elif substantive_ratio < 0.6:
-            # Less than 60% good answers - cap all scores at 65
-            print(f"[Interview Feedback] MEDIUM substantive ratio - capping all scores at 65")
+                scores[key] = min(scores[key], 45)
+        elif quality['avg_length'] < 20:
             for key in scores:
                 scores[key] = min(scores[key], 65)
+        
+        if quality['casual_count'] > 3:
+            scores['professionalism'] = min(scores['professionalism'], 55)
         
         overall_score = _calculate_weighted_score(scores)
         performance_level = _get_performance_level(overall_score)
@@ -1765,133 +1111,75 @@ Respond ONLY with this JSON (no markdown, no explanation):
         
     else:
         # Fallback: generate basic scores from response quality metrics
+        base_score = 50
+        if quality['avg_length'] > 25:
+            base_score += 15
+        elif quality['avg_length'] > 15:
+            base_score += 8
+        elif quality['avg_length'] < 8:
+            base_score -= 15
         
-        # SPECIAL CASE: No answers at all - give minimum score of 5
-        if questions_answered == 0:
-            print("[Interview Feedback] No answers provided - setting all scores to 5")
-            scores = {
-                'technical_knowledge': 5,
-                'communication': 5,
-                'problem_solving': 5,
-                'professionalism': 5,
-                'enthusiasm': 5,
-                'confidence': 5
-            }
-            overall_score = 5
-            performance_level = "Needs Work"
-            strengths = ["Started the interview process"]
-            improvements = [
-                "Complete the interview by answering questions",
-                "Engage with the interviewer and provide thoughtful responses",
-                "Practice answering common interview questions"
-            ]
-            knowledge_assessment = {
-                "demonstrated_skills": [],
-                "skill_gaps": ["Unable to assess - no responses provided"],
-                "depth_of_knowledge": "unable to assess"
-            }
-            communication_feedback = {
-                "clarity": "Unable to assess - no responses",
-                "structure": "Unable to assess - no responses",
-                "vocabulary": "Unable to assess - no responses"
-            }
-            interviewer_guidance = {
-                "hiring_recommendation": "No Hire",
-                "reasoning": "Candidate did not provide any responses during the interview.",
-                "follow_up_areas": ["Re-interview with full participation required"]
-            }
-            detailed_feedback = "The candidate did not answer any questions during the interview. Unable to provide assessment."
-        else:
-            # Start with base score based on overall engagement
-            base_score = 30  # Start lower - must earn points
+        tech_bonus = min(20, quality['technical_keywords'] * 3)
+        casual_penalty = min(15, quality['casual_count'] * 5)
         
-            # Add points for response length
-            if quality['avg_length'] >= 30:
-                base_score += 25
-            elif quality['avg_length'] >= 20:
-                base_score += 15
-            elif quality['avg_length'] >= 12:
-                base_score += 8
-            elif quality['avg_length'] < 8:
-                base_score -= 10  # Very short answers = penalty
-            
-            # Add points for technical content
-            tech_bonus = min(25, quality['technical_keywords'] * 4)
-            
-            # Penalty for casual/unprofessional language
-            casual_penalty = min(20, quality['casual_count'] * 6)
-            
-            # Bonus for completing more questions
-            completion_bonus = min(15, questions_answered * 2)
-            
-            scores = {
-                'technical_knowledge': max(10, min(max_score_cap, base_score + tech_bonus)),
-                'communication': max(10, min(max_score_cap, base_score + 5 - casual_penalty)),
-                'problem_solving': max(10, min(max_score_cap, base_score - 5 + tech_bonus // 2)),
-                'professionalism': max(10, min(max_score_cap, base_score - casual_penalty)),
-                'enthusiasm': max(10, min(max_score_cap, base_score + completion_bonus // 2)),
-                'confidence': max(10, min(max_score_cap, base_score))
-            }
-            
-            # Apply early termination penalty
-            if early_termination:
-                penalty = early_termination['penalty']
-                print(f"[Interview Feedback] Fallback - applying penalty: -{penalty}")
-                for key in scores:
-                    scores[key] = max(5, scores[key] - penalty)  # Minimum 5
-            
-            # Apply max cap
+        scores = {
+            'technical_knowledge': max(15, min(85, base_score + tech_bonus - 5)),
+            'communication': max(15, min(85, base_score + 5 - casual_penalty)),
+            'problem_solving': max(15, min(85, base_score - 5 + tech_bonus // 2)),
+            'professionalism': max(15, min(85, base_score - casual_penalty)),
+            'enthusiasm': max(15, min(85, base_score + 5)),
+            'confidence': max(15, min(85, base_score))
+        }
+        
+        if early_termination:
+            penalty = early_termination['penalty']
             for key in scores:
-                scores[key] = min(scores[key], max_score_cap)
-            
-            # If no technical keywords, cap technical knowledge very low
-            if quality['technical_keywords'] == 0:
-                scores['technical_knowledge'] = min(scores['technical_knowledge'], 30)
-            
-            overall_score = _calculate_weighted_score(scores)
-            performance_level = _get_performance_level(overall_score)
-            
-            strengths = []
-            improvements = []
-            
-            if quality['avg_length'] > 20:
-                strengths.append("Provided detailed responses to interview questions")
-            if quality['technical_keywords'] > 3:
-                strengths.append("Demonstrated awareness of relevant technical concepts")
-            if quality['casual_count'] < 2:
-                strengths.append("Maintained a professional communication style")
-            if questions_answered >= 5:
-                strengths.append("Engaged thoroughly throughout the interview")
-            if not strengths:
-                strengths.append("Participated in the interview process")
-            
-            if quality['avg_length'] < 15:
-                improvements.append("Provide more detailed and thorough answers")
-            if quality['technical_keywords'] < 3:
-                improvements.append("Include more specific technical details and examples")
-            if quality['casual_count'] > 2:
-                improvements.append("Use more professional language and reduce filler words")
-            if questions_answered < 5:
-                improvements.append("Try to engage more fully and answer more questions")
-            if not improvements:
-                improvements.append("Continue refining communication and technical depth")
-            
-            knowledge_assessment = {
-                "demonstrated_skills": ["Interview participation"],
-                "skill_gaps": ["Unable to fully assess without AI analysis"],
-                "depth_of_knowledge": "moderate" if quality['technical_keywords'] > 3 else "shallow"
-            }
-            communication_feedback = {
-                "clarity": "Good" if quality['avg_length'] > 15 else "Needs improvement - responses were brief",
-                "structure": "Adequate" if quality['avg_length'] > 20 else "Could be more structured",
-                "vocabulary": "Professional" if quality['casual_count'] < 2 else "Could be more formal"
-            }
-            interviewer_guidance = {
-                "hiring_recommendation": "Hire" if overall_score >= 75 else "Maybe" if overall_score >= 55 else "No Hire",
-                "reasoning": f"Candidate scored {overall_score}/100 overall. {'Strong candidate with good potential.' if overall_score >= 70 else 'Needs further evaluation in key areas.'}",
-                "follow_up_areas": ["Technical depth assessment", "Problem-solving with specific scenarios"]
-            }
-            detailed_feedback = f"The candidate completed {questions_answered} questions with an average response length of {quality['avg_length']} words."
+                scores[key] = max(10, scores[key] - penalty)
+        
+        overall_score = _calculate_weighted_score(scores)
+        performance_level = _get_performance_level(overall_score)
+        
+        strengths = []
+        improvements = []
+        
+        if quality['avg_length'] > 20:
+            strengths.append("Provided detailed responses to interview questions")
+        if quality['technical_keywords'] > 3:
+            strengths.append("Demonstrated awareness of relevant technical concepts")
+        if quality['casual_count'] < 2:
+            strengths.append("Maintained a professional communication style")
+        if questions_answered >= 5:
+            strengths.append("Engaged thoroughly throughout the interview")
+        if not strengths:
+            strengths.append("Participated in the interview process")
+        
+        if quality['avg_length'] < 15:
+            improvements.append("Provide more detailed and thorough answers")
+        if quality['technical_keywords'] < 3:
+            improvements.append("Include more specific technical details and examples")
+        if quality['casual_count'] > 2:
+            improvements.append("Use more professional language and reduce filler words")
+        if questions_answered < 5:
+            improvements.append("Try to engage more fully and answer more questions")
+        if not improvements:
+            improvements.append("Continue refining communication and technical depth")
+        
+        knowledge_assessment = {
+            "demonstrated_skills": ["Interview participation"],
+            "skill_gaps": ["Unable to fully assess without AI analysis"],
+            "depth_of_knowledge": "moderate" if quality['technical_keywords'] > 3 else "shallow"
+        }
+        communication_feedback = {
+            "clarity": "Good" if quality['avg_length'] > 15 else "Needs improvement - responses were brief",
+            "structure": "Adequate" if quality['avg_length'] > 20 else "Could be more structured",
+            "vocabulary": "Professional" if quality['casual_count'] < 2 else "Could be more formal"
+        }
+        interviewer_guidance = {
+            "hiring_recommendation": "Hire" if overall_score >= 75 else "Maybe" if overall_score >= 55 else "No Hire",
+            "reasoning": f"Candidate scored {overall_score}/100 overall. {'Strong candidate with good potential.' if overall_score >= 70 else 'Needs further evaluation in key areas.'}",
+            "follow_up_areas": ["Technical depth assessment", "Problem-solving with specific scenarios"]
+        }
+        detailed_feedback = f"The candidate completed {questions_answered} questions with an average response length of {quality['avg_length']} words."
     
     scorecard = _generate_scorecard(scores)
     tips = _generate_tips(scores)
@@ -1920,66 +1208,3 @@ Respond ONLY with this JSON (no markdown, no explanation):
         "scorecard": scorecard,
         "tips": tips
     }
-
-
-# ============= D-ID VIDEO GENERATION ENDPOINT =============
-
-@interview_bp.route('/generate-video', methods=['POST'])
-def generate_talking_video():
-    """
-    Generate a talking avatar video for the AI response.
-    
-    Request body:
-    {
-        "text": "The text for the avatar to speak",
-        "session_id": "optional - for tracking"
-    }
-    
-    Response:
-    {
-        "success": true,
-        "video_url": "https://...",
-        "duration": 5.2
-    }
-    """
-    try:
-        data = request.get_json()
-        text = data.get('text', '').strip()
-        
-        if not text:
-            return jsonify({
-                "success": False,
-                "error": "No text provided"
-            }), 400
-        
-        # Check if D-ID is configured
-        if not get_did_key():
-            return jsonify({
-                "success": False,
-                "error": "D-ID not configured. Use browser TTS instead.",
-                "use_tts": True
-            }), 503
-        
-        # Create the talking video
-        result = create_did_video(text)
-        
-        return jsonify(result)
-        
-    except Exception as e:
-        print(f"❌ Generate video error: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e),
-            "use_tts": True  # Fallback to TTS
-        }), 500
-
-
-@interview_bp.route('/avatar-status', methods=['GET'])
-def get_avatar_status():
-    """Check if D-ID avatar feature is available"""
-    api_key = get_did_key()
-    return jsonify({
-        "available": api_key is not None,
-        "interviewer_image": INTERVIEWER_IMAGE_URL if api_key else None,
-        "message": "D-ID avatar ready" if api_key else "D-ID not configured - using browser TTS"
-    })
