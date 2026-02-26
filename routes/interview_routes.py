@@ -12,6 +12,7 @@ import os
 import json
 import re
 import random
+from langdetect import detect, LangDetectException
 import requests
 from utils.db import get_db
 from bson import ObjectId
@@ -180,24 +181,19 @@ class InterviewSession:
         ]
         is_abusive = any(phrase in msg_lower for phrase in abusive_phrases)
         
-        # === Non-English Detection (Hindi/other languages) ===
-        msg_words = set(re.findall(r'\b[a-z]+\b', msg_lower))
-        has_devanagari = any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message)
-        
-        hindi_romanized = {
-            'kya', 'kaise', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi',
-            'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'accha', 'theek',
-            'meri', 'mera', 'bahut', 'gaya', 'gayi', 'abhi', 'kaha', 'lekin',
-            'matlab', 'samajh', 'dekho', 'suno', 'batao', 'chalo', 'ruko',
-            'main', 'hoon', 'tumhe', 'mujhe', 'pata', 'batata', 'phir', 'bohot',
-            'hogaya', 'milega', 'sahi', 'galat', 'yaar', 'arey', 'jaata', 'aata',
-            'kaisa', 'kahan', 'apna', 'apni', 'uska', 'uski', 'sakta', 'chahiye',
-            'dena', 'lena', 'aaya', 'ghar', 'kaam', 'wala', 'koi', 'aisa', 'tujhe',
-            'tumhara', 'humara', 'khana', 'jaana', 'aana', 'samjha', 'milna',
-            'hona', 'hota', 'toh', 'kyunki', 'jab', 'bilkul', 'zaroor', 'shayad'
-        }
-        hindi_word_matches = msg_words.intersection(hindi_romanized)
-        is_non_english = has_devanagari or len(hindi_word_matches) >= 2
+        # === Non-English Detection (using langdetect library) ===
+        is_non_english = False
+        detected_lang = None
+        if len(message.strip()) >= 3:  # Need at least 3 chars for detection
+            try:
+                detected_lang = detect(message)
+                # English is 'en', anything else is non-English
+                is_non_english = detected_lang != 'en'
+                if is_non_english:
+                    print(f"[Language Detection] Detected: {detected_lang} - Message: {message[:50]}...")
+            except LangDetectException:
+                # If detection fails, assume English
+                is_non_english = False
         
         # === Analysis ===
         is_casual = any(phrase in msg_lower for phrase in casual_phrases) and word_count < 12

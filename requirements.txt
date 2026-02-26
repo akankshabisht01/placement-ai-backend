@@ -35,3 +35,5 @@ resend>=2.0.0
 
 # Edge TTS for natural voice synthesis
 edge-tts>=6.1.0
+
+langdetect>=1.0.9
