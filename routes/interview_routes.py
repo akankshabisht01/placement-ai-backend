@@ -590,6 +590,88 @@ def transcribe_audio():
         }), 500
 
 
+
+
+# ============= EDGE TTS: Natural Voice Synthesis =============
+# Uses Microsoft Edge's TTS service for high-quality, natural-sounding voices
+# No API key required, ~50KB package, HTTP-only
+
+@interview_bp.route('/tts', methods=['POST'])
+def text_to_speech():
+    """
+    Convert text to speech using Edge TTS (FAST, Natural Voice)
+    
+    Input JSON: { "text": "Hello there" }
+    Returns: Audio file (MP3)
+    """
+    import asyncio
+    import tempfile
+    import os as os_module
+    
+    try:
+        data = request.get_json()
+        text = data.get('text', '').strip()
+        voice = data.get('voice', 'en-US-GuyNeural')  # Male interviewer voice
+        
+        if not text:
+            return jsonify({
+                "success": False,
+                "error": "No text provided"
+            }), 400
+        
+        # Limit text length for safety
+        if len(text) > 1000:
+            text = text[:1000]
+        
+        async def generate_audio():
+            import edge_tts
+            
+            # Create temp file for audio
+            fd, temp_path = tempfile.mkstemp(suffix='.mp3')
+            os_module.close(fd)
+            
+            try:
+                communicate = edge_tts.Communicate(text, voice)
+                await communicate.save(temp_path)
+                
+                # Read the audio file
+                with open(temp_path, 'rb') as f:
+                    audio_data = f.read()
+                
+                return audio_data
+            finally:
+                # Clean up temp file
+                if os_module.path.exists(temp_path):
+                    os_module.unlink(temp_path)
+        
+        # Run async function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            audio_data = loop.run_until_complete(generate_audio())
+        finally:
+            loop.close()
+        
+        from flask import Response
+        return Response(
+            audio_data,
+            mimetype='audio/mpeg',
+            headers={
+                'Content-Disposition': 'inline; filename="speech.mp3"',
+                'Content-Length': str(len(audio_data))
+            }
+        )
+        
+    except Exception as e:
+        print(f"TTS error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
 @interview_bp.route('/history/<phone_number>', methods=['GET'])
 def get_interview_history(phone_number):
     """Get interview history for a user"""

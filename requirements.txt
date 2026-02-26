@@ -32,3 +32,6 @@ pydantic>=2.6.0
 
 # Email API service
 resend>=2.0.0
+
+# Edge TTS for natural voice synthesis
+edge-tts>=6.1.0
