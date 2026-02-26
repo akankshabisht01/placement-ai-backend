@@ -143,19 +143,89 @@ class InterviewSession:
         return scenario
     
     def analyze_answer(self, message):
-        """Analyze if answer is substantive or casual"""
-        msg_lower = message.lower().strip()
+        """Comprehensive answer analysis with quality scoring"""
+        import re
         
+        msg_lower = message.lower().strip()
+        word_count = len(message.split())
+        
+        # === Casual/Social Phrases (not interview content) ===
         casual_phrases = [
             "doing great", "doing good", "i'm good", "i'm fine", "doing fine",
             "good thanks", "fine thanks", "how are you", "what about you",
             "hello", "hi", "hey", "good morning", "good afternoon", "i'm doing well"
         ]
         
-        is_casual = any(phrase in msg_lower for phrase in casual_phrases) and len(msg_lower.split()) < 10
-        has_substance = len(message.split()) > 8 and not is_casual
+        # === Clarification Requests (user didn't understand the question) ===
+        clarification_phrases = [
+            "what do you mean", "i don't understand", "can you explain",
+            "can you rephrase", "repeat that", "say that again", "repeat please",
+            "sorry what", "sorry?", "what?", "pardon", "come again",
+            "didn't catch that", "clarify", "what exactly"
+        ]
+        is_clarification_request = any(phrase in msg_lower for phrase in clarification_phrases)
         
-        return {"is_casual": is_casual, "has_substance": has_substance}
+        # === Off-Topic/Irrelevant Phrases ===
+        off_topic_phrases = [
+            "weather", "lunch", "dinner", "movie", "music", "game", "sports",
+            "girlfriend", "boyfriend", "party", "vacation", "tell me a joke",
+            "pizza", "burger", "i love you", "lol", "haha", "lmao"
+        ]
+        
+        # === Abusive Language Detection ===
+        abusive_phrases = [
+            "fuck", "shit", "damn", "ass", "bitch", "idiot", "stupid", "dumb",
+            "madarchod", "bhenchod", "chutiya", "gandu", "randi", "bc", "mc",
+            "bsdk", "harami", "kamina", "bakchod"
+        ]
+        is_abusive = any(phrase in msg_lower for phrase in abusive_phrases)
+        
+        # === Non-English Detection (Hindi/other languages) ===
+        msg_words = set(re.findall(r'\b[a-z]+\b', msg_lower))
+        has_devanagari = any(ord(c) >= 0x0900 and ord(c) <= 0x097F for c in message)
+        
+        hindi_romanized = {
+            'kya', 'kaise', 'hain', 'tum', 'mein', 'kuch', 'bolo', 'baat', 'nahi',
+            'kyun', 'aap', 'karo', 'hum', 'yeh', 'woh', 'kaun', 'accha', 'theek',
+            'meri', 'mera', 'bahut', 'gaya', 'gayi', 'abhi', 'kaha', 'lekin',
+            'matlab', 'samajh', 'dekho', 'suno', 'batao', 'chalo', 'ruko',
+            'main', 'hoon', 'tumhe', 'mujhe', 'pata', 'batata', 'phir', 'bohot',
+            'hogaya', 'milega', 'sahi', 'galat', 'yaar', 'arey', 'jaata', 'aata',
+            'kaisa', 'kahan', 'apna', 'apni', 'uska', 'uski', 'sakta', 'chahiye',
+            'dena', 'lena', 'aaya', 'ghar', 'kaam', 'wala', 'koi', 'aisa', 'tujhe',
+            'tumhara', 'humara', 'khana', 'jaana', 'aana', 'samjha', 'milna',
+            'hona', 'hota', 'toh', 'kyunki', 'jab', 'bilkul', 'zaroor', 'shayad'
+        }
+        hindi_word_matches = msg_words.intersection(hindi_romanized)
+        is_non_english = has_devanagari or len(hindi_word_matches) >= 2
+        
+        # === Analysis ===
+        is_casual = any(phrase in msg_lower for phrase in casual_phrases) and word_count < 12
+        is_off_topic = any(phrase in msg_lower for phrase in off_topic_phrases) or is_non_english
+        
+        # === Calculate Quality Score (0-3) ===
+        quality_score = 1
+        if is_off_topic or is_casual or is_abusive or is_non_english:
+            quality_score = 0
+        elif word_count < 8:
+            quality_score = 1
+        elif word_count < 20:
+            quality_score = 2
+        else:
+            quality_score = 3
+        
+        has_substance = quality_score >= 2
+        
+        return {
+            "is_casual": is_casual,
+            "is_off_topic": is_off_topic,
+            "is_abusive": is_abusive,
+            "is_non_english": is_non_english,
+            "is_clarification_request": is_clarification_request,
+            "has_substance": has_substance,
+            "quality_score": quality_score,
+            "word_count": word_count
+        }
 
 
 def get_smart_system_prompt(session):
@@ -315,6 +385,49 @@ def process_response():
         
         # Analyze user's answer quality
         answer_analysis = interview_session.analyze_answer(user_message)
+
+        # === DIRECT HANDLING: Abusive language ===
+        if answer_analysis.get('is_abusive', False):
+            warning_response = "Please maintain professional language. Let me repeat the question."
+            interview_session.conversation_history.append({"role": "user", "content": user_message})
+            interview_session.conversation_history.append({"role": "assistant", "content": warning_response})
+            return jsonify({
+                "success": True,
+                "message": warning_response,
+                "state": interview_session.state,
+                "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
+                "should_speak": True
+            })
+
+        # === DIRECT HANDLING: Non-English response ===
+        if answer_analysis.get('is_non_english', False):
+            english_response = "Please respond in English. Let me repeat the question."
+            interview_session.conversation_history.append({"role": "user", "content": user_message})
+            interview_session.conversation_history.append({"role": "assistant", "content": english_response})
+            return jsonify({
+                "success": True,
+                "message": english_response,
+                "state": interview_session.state,
+                "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
+                "should_speak": True
+            })
+
+        # === DIRECT HANDLING: Clarification request ===
+        if answer_analysis.get('is_clarification_request', False):
+            last_q = interview_session.questions_asked[-1] if interview_session.questions_asked else "What are your key skills?"
+            clarify_response = "Sure, let me rephrase. " + last_q
+            interview_session.conversation_history.append({"role": "user", "content": user_message})
+            interview_session.conversation_history.append({"role": "assistant", "content": clarify_response})
+            return jsonify({
+                "success": True,
+                "message": clarify_response,
+                "state": interview_session.state,
+                "question_count": interview_session.question_count,
+                "difficulty_level": interview_session.difficulty_level,
+                "should_speak": True
+            })
         
         # Add user message to history
         interview_session.conversation_history.append({
