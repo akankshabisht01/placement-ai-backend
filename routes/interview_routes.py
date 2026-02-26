@@ -388,7 +388,8 @@ def process_response():
 
         # === DIRECT HANDLING: Abusive language ===
         if answer_analysis.get('is_abusive', False):
-            warning_response = "Please maintain professional language. Let me repeat the question."
+            last_q = interview_session.questions_asked[-1] if interview_session.questions_asked else "Tell me about yourself."
+            warning_response = "Please maintain professional language. " + last_q
             interview_session.conversation_history.append({"role": "user", "content": user_message})
             interview_session.conversation_history.append({"role": "assistant", "content": warning_response})
             return jsonify({
@@ -402,7 +403,8 @@ def process_response():
 
         # === DIRECT HANDLING: Non-English response ===
         if answer_analysis.get('is_non_english', False):
-            english_response = "Please respond in English. Let me repeat the question."
+            last_q = interview_session.questions_asked[-1] if interview_session.questions_asked else "Tell me about yourself."
+            english_response = "Please respond in English. " + last_q
             interview_session.conversation_history.append({"role": "user", "content": user_message})
             interview_session.conversation_history.append({"role": "assistant", "content": english_response})
             return jsonify({
