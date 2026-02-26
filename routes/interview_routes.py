@@ -251,6 +251,7 @@ STRICT RULES:
 4. Keep total response under 35 words
 5. Ask questions specifically relevant to {session.position}
 6. Never cut off mid-sentence
+7. ALWAYS respond in English only. Never use Hindi or any other language.
 
 RESPONSE FORMAT:
 - Good technical answer: "Good! [Next question about new topic]"
@@ -1405,3 +1406,4 @@ You MUST respond in EXACTLY this JSON format (no other text):
         "scorecard": scorecard,
         "tips": tips
     }
+
